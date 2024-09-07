@@ -1,0 +1,14 @@
+{
+	"name": "@j5g3/core",
+	"version": "0.0.1",
+	"bugs": "https://github.com/j5g3/engine/issues",
+	"homepage": "https://github.com/j5g3/engine",
+	"description": "j5g3",
+	"license": "UNLICENSED",
+	"browser": "index.min.js",
+	"type": "module",
+	"scripts": {
+		"build": "cxl-build",
+		"test": "npm run build && cd ../dist/core && cxl-tester --mjs"
+	}
+}

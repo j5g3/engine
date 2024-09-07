@@ -1,0 +1,15 @@
+<!doctype html>
+<title>@j5g3/core Test Suite</title>
+<script type="importmap">
+	{
+		"imports": {
+			"@cxl/rx": "../../node_modules/@cxl/rx/mjs/index.js",
+			"@cxl/spec": "../../node_modules/@cxl/spec/mjs/index.js"
+		}
+	}
+</script>
+<script type="module">
+	import suite from './test.js';
+	import browserRunner from '../../node_modules/@cxl/tester/mjs/browser-runner.js';
+	browserRunner.run([suite], '../../core/spec');
+</script>

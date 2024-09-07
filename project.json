@@ -1,0 +1,10 @@
+{
+	"watch": {
+		"rules": {
+			"core": {
+				"files": ["core/*"],
+				"tasks": "npm run build --prefix core"
+			}
+		}
+	}
+}
