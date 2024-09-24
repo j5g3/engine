@@ -1,0 +1,17 @@
+{
+	"width": 640,
+	"height": 480,
+	"container": "body",
+	"autoStart": true,
+	"root": {
+		"load": "\nconst Black = [0, 0, 0, 255];\nconst White = [255, 255, 255, 255];\n\nconst cols = 320,\n\trows = 240;\n\n/**\n * Seed value for random cell placement.\n *\n * Determines the initial density of alive cells in the grid.\n * A value of 0.5 means approximately 50% of the cells will be alive initially.\n * Higher values result in denser initial populations.\n */\nconst seed = 0.5;\nconst width = 640;\nconst height = 480;\nconst LEN = cols * rows,\n\tmap = new ImageData(cols, rows);\nlet points = new Int8Array(LEN);\nlet newPoints = new Int8Array(LEN);\n\n/**\n * Normalizes an index `i` to ensure it wraps around the array bounds. If `i` is out of bounds,\n * it's adjusted to remain within 0 and `LEN - 1` using modular arithmetic.\n */\nfunction get(i) {\n\tif (i < 0 || i >= LEN) i = ((i % LEN) + LEN) % LEN;\n\treturn points[i];\n}\n\n/* Returns sum of alive cells */\nfunction neighbours(i) {\n\treturn (\n\t\tget(i - cols - 1) +\n\t\tget(i - cols) +\n\t\tget(i - cols + 1) +\n\t\tget(i + 1) +\n\t\tget(i + cols + 1) +\n\t\tget(i + cols) +\n\t\tget(i + cols - 1) +\n\t\tget(i - 1)\n\t);\n}\n\n/**\n * Sets the color of a pixel in the `map` ImageData.\n *\n * @param pos The index of the pixel to set.\n * @param color The color to set the pixel to, represented as an array of 4 numbers (RGBA).\n */\nfunction setColor(pos, color) {\n\tmap.data.set(color, pos * 4);\n}\n\n/**\n * Initializes the canvas with a white background and randomly places black cells based on the seed value.\n * This sets up the initial state of the Game of Life simulation.\n * The `seed` value controls the initial randomness of the simulation. A higher seed will result in more initially alive cells.\n */\nfor (let y = 0; y < rows; y++)\n\tfor (let x = 0; x < cols; x++) {\n\t\tconst pos = y * cols + x;\n\t\tconst isOn = Math.random() > seed ? 1 : 0;\n\t\tsetColor(pos, isOn ? Black : White);\n\t\tpoints[pos] = isOn;\n\t}\n\tnode.texture.src = map;\n\t",
+		"box": {
+			"w": 640,
+			"h": 480
+		},
+		"texture": {
+			"magFilter": 9728
+		},
+		"update": "\n\t\t\t/**\n\t\t\t * Implements the core logic of Conway's Game of Life.\n\t\t\t *\n\t\t\t * For each cell in the grid, it calculates the number of live neighbors. Based on the rules of the game:\n\t\t\t * - A live cell with 2 or 3 live neighbors stays alive.\n\t\t\t * - A dead cell with exactly 3 live neighbors becomes alive.\n\t\t\t * - All other cells die or remain dead.\n\t\t\t *\n\t\t\t * The `newPoints` array stores the state of the grid for the next generation. After processing all cells,\n\t\t\t * the `points` array is updated with the new state. The texture is marked as dirty to ensure the changes\n\t\t\t * are reflected on the canvas. Finally, `newPoints` is reset by referencing the old `points` array to avoid\n\t\t\t * unnecessary memory allocation in each update.\n\t\t\t */\n\t\t\t\tconst LEN=320*240;\nfor (let i = 0; i < LEN; i++) {\n\t\t\t\t\tconst a = neighbours(i);\n\t\t\t\t\tconst live = (a === 2 && points[i]) || a === 3;\n\t\t\t\t\tnewPoints[i] = live ? 1 : 0;\n\t\t\t\t\tsetColor(i, live ? Black : White);\n\t\t\t\t}\n\t\t\t\tconst a = points;\n\t\t\t\tpoints = newPoints;\n\t\t\t\tnode.texture.dirty = true;\n\t\t\t\tnewPoints = a;\n\t\t\t"
+	}
+}
