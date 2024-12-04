@@ -1,4 +1,6 @@
 ///<amd-module name="@j5g3/core"/>
+import type { Gltf } from './gltf.js';
+
 export interface Rect {
 	x: number;
 	y: number;
@@ -351,18 +353,19 @@ void main() {
 	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
 	const positionBuffer = gl.createBuffer();
 	const texCoordBuffer = gl.createBuffer();
+	const indicesBuffer = gl.createBuffer();
+	const orthographicM = orthographic(0, width, height, 0, -1, 1);
+
+	// The data represents the vertices of a unit square in normalized device coordinates.
+	const positionBufferData = new Float32Array([
+		0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1,
+	]);
 
 	let u_color = whiteColor;
 	let u_texture: WebGLTexture;
 
 	// Initialize the buffer with vertex position data.
-	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-	gl.bufferData(
-		gl.ARRAY_BUFFER,
-		// The data represents the vertices of a unit square in normalized device coordinates.
-		new Float32Array([0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]),
-		gl.STATIC_DRAW,
-	);
+	setPosition(positionBufferData);
 
 	// Initialize the buffer with texture coordinate data.
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -375,7 +378,7 @@ void main() {
 
 	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
 	gl.enableVertexAttribArray(positionLocation);
-	gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+	//gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 	gl.enableVertexAttribArray(texCoordLocation);
 	gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
@@ -389,12 +392,23 @@ void main() {
 	gl.uniform4fv(colorLocation, u_color);
 
 	gl.viewport(0, 0, width, height);
-	gl.uniformMatrix4fv(
-		pmatrixLocation,
-		false,
-		orthographic(0, width, height, 0, -1, 1),
-	);
+	setProjectionMatrix(orthographicM);
 	gl.activeTexture(gl.TEXTURE0);
+
+	function setProjectionMatrix(m: Matrix) {
+		gl.uniformMatrix4fv(pmatrixLocation, false, m);
+	}
+
+	function setPosition(data: ArrayBuffer | ArrayBufferView, size = 2) {
+		gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+		gl.vertexAttribPointer(positionLocation, size, gl.FLOAT, false, 0, 0);
+		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
+
+	function setIndices(data: ArrayBuffer | ArrayBufferView) {
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
 
 	function setTexture(texture: WebGLTexture) {
 		if (u_texture !== texture) {
@@ -425,6 +439,15 @@ void main() {
 			if (color !== u_color)
 				gl.uniform4fv(colorLocation, (u_color = color));
 		},
+		resetPosition() {
+			setPosition(positionBufferData);
+		},
+		setIndices,
+		setPosition,
+		setProjectionMatrix,
+		resetProjectionMatrix() {
+			setProjectionMatrix(orthographicM);
+		},
 		setTexture,
 		createTexture: Texture.bind(0, gl),
 		createColorTexture: ColorTexture.bind(0, gl),
@@ -445,6 +468,7 @@ void main() {
 		draw() {
 			gl.drawArrays(gl.TRIANGLES, 0, 6);
 		},
+		drawElements: gl.drawElements.bind(gl),
 	};
 }
 
@@ -510,6 +534,7 @@ export type FillComponent = {
 } & Mutable;
 export type BoxComponent = Partial<Box> & Mutable;
 export type UpdateFn = string | ((node: Node) => void);
+export type WebglContext = ReturnType<typeof webgl2>;
 
 export interface Node {
 	box?: BoxComponent;
@@ -518,6 +543,11 @@ export interface Node {
 	children?: Record<string | number, Node>;
 	update?: UpdateFn;
 	fill?: FillComponent;
+	model?: ModelComponent;
+}
+
+export interface ModelComponent {
+	gltf: Gltf;
 }
 
 export interface EngineOptions<T> {
@@ -587,8 +617,13 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 		});
 	}
 
+	async function model(model: ModelComponent) {
+		const { gltf } = await import('./gltf.js');
+		render(await gltf(program, model.gltf));
+	}
+
 	async function load(node: Node) {
-		const { children, update } = node;
+		const { update } = node;
 
 		if (update) {
 			const fn =
@@ -601,11 +636,12 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 		if (node.fill) fill(node.fill);
 		if (node.texture) texture(node.texture);
 		if (node.image) await image(node.image);
+		if (node.model) await model(node.model);
 
-		if (children) {
-			const nodes = Array.isArray(children)
-				? children
-				: Object.values(children);
+		if (node.children) {
+			const nodes = Array.isArray(node.children)
+				? node.children
+				: Object.values(node.children);
 			for (const child of nodes) await load(child);
 		}
 		if (node.box) render(() => program.popMatrix());

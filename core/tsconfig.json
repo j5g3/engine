@@ -3,5 +3,5 @@
 	"compilerOptions": {
 		"outDir": "../dist/core"
 	},
-	"files": ["index.ts"]
+	"files": ["index.ts", "gltf.ts"]
 }
