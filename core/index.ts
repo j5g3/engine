@@ -626,11 +626,12 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 		const { update } = node;
 
 		if (update) {
-			const fn =
+			const fn = (
 				typeof update === 'function'
 					? update
-					: new Function('node', update);
-			render(() => fn(node));
+					: new Function('node', update)
+			)(node);
+			render(fn);
 		}
 		if (node.box) boxComponent(node.box);
 		if (node.fill) fill(node.fill);
