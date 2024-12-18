@@ -21,10 +21,20 @@ export interface Box extends Rect {
 export type Matrix = Float32Array;
 export type Color = [number, number, number, number];
 
+export type ArrayBufferOptions = {
+	data: ArrayBuffer;
+	size?: number;
+	type?: number;
+	normalized?: boolean;
+	stride?: number;
+	offset?: number;
+};
+
 export const identity = new Float32Array([
 	1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ]) as Readonly<Matrix>;
-export const whiteColor: Color = [255, 255, 255, 255];
+export const whiteColor: Color = [1, 1, 1, 1];
+export const blackColor: Color = [0, 0, 0, 1];
 
 export function Matrix(m?: number[]) {
 	return m ? new Float32Array(m) : identity.slice(0);
@@ -277,7 +287,11 @@ export function Texture(gl: WebGL2RenderingContext, o: TextureOptions) {
  */
 function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
 	return Texture(gl, {
-		src: new ImageData(new Uint8ClampedArray(color), 1, 1),
+		src: new ImageData(
+			new Uint8ClampedArray(color.map(c => c * 255)),
+			1,
+			1,
+		),
 		minFilter: gl.NEAREST,
 	});
 }
@@ -296,29 +310,104 @@ export function webgl2({ width, height }: { width: number; height: number }) {
 		frag: `#version 300 es
 precision mediump float;
 
-uniform sampler2D u_texture;
+in vec3 v_normal;
+in vec3 v_position;
 in vec2 v_texcoord;
+
+uniform sampler2D u_texture;
+uniform sampler2D u_normalTexture;
+uniform sampler2D u_metallicTexture;
+uniform sampler2D u_roughnessTexture;
+uniform sampler2D u_aoTexture;
+
+uniform vec3 u_lightPosition;
+uniform vec3 u_cameraPosition;
 uniform vec4 u_color;
 
 out vec4 outColor;
 
-void main() {
-    outColor = texture(u_texture, v_texcoord) * (u_color / 255.0);
+#define PI 3.14159265359
+
+vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, vec3 normal, vec3 fragPos) {
+    vec3 lightColor = vec3(1.0);
+    vec3 lightDir = normalize(u_lightPosition - fragPos);
+    vec3 viewDir = normalize(u_cameraPosition - fragPos);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+
+    float distance = max(length(u_lightPosition - fragPos), 1e-6);
+    float attenuation = 1.0 / (distance * distance);
+    vec3 radiance = lightColor * attenuation;
+
+    // Ambient
+    vec4 ambient = ao * albedo;
+
+    // Diffuse (Lambertian)
+    float dotNormalLight = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = dotNormalLight * albedo.rgb;
+
+    // Specular (Cook-Torrance BRDF)
+    float roughnessSq = roughness * roughness;
+
+    // Avoid division by zero
+    float NdotH = max(dot(normal, halfwayDir), 0.0001);
+    float dotNormalView = max(dot(normal, viewDir), 0.0001);
+    float VdotH = max(dot(viewDir, halfwayDir), 0.0001);
+
+    // Distribution (Trowbridge-Reitz / GGX)
+    float nom   = roughnessSq;
+    float denom = (NdotH * NdotH * (roughnessSq - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    float distribution = nom / max(denom, 1e-6);
+
+    // Fresnel-Schlick approximation with metallic
+	vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
+	float cosTheta = max(dot(normal, viewDir), 0.0);
+	vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+
+    // Geometry (Smith's method with Schlick-GGX)
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float GGX1 = dotNormalView / (dotNormalView * (1.0 - k) + k);
+    float GGX2 = dotNormalLight / (dotNormalLight * (1.0 - k) + k);
+    float geometry = GGX1 * GGX2;
+
+	vec3 specular = (distribution * geometry * fresnel) / max(4.0 * dotNormalLight * dotNormalView, 0.0001);
+
+    // Only add specular if dotNormalLight is positive
+    vec3 finalSpecular = dotNormalLight > 0.0 ? specular : vec3(0.0);
+
+    return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
 }
-		`,
+
+void main() {
+    vec4 albedo = texture(u_texture, v_texcoord) * u_color;
+    vec3 normal = normalize(texture(u_normalTexture, v_texcoord).rgb * 2.0 - 1.0);
+    float metallic = texture(u_metallicTexture, v_texcoord).r;
+    float roughness = texture(u_roughnessTexture, v_texcoord).r;
+    float ao = texture(u_aoTexture, v_texcoord).r; // Use the correct texture
+
+	outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
+}
+`,
 		vtx: `#version 300 es
 precision mediump float;
 
 in vec4 a_position;
+in vec3 a_normal;
 in vec2 a_texcoord;
+
 uniform mat4 u_matrix;
 uniform mat4 p_matrix;
 uniform mat4 u_textureMatrix;
+uniform mat4 u_normalMatrix;
 
 out vec2 v_texcoord;
+out vec3 v_normal;
+out vec3 v_position;
 
 void main() {
    gl_Position = p_matrix * u_matrix * a_position;
+   v_position = gl_Position.xyz;
+   v_normal = normalize(vec3(u_normalMatrix * vec4(a_normal, 0.0)));
    v_texcoord = (u_textureMatrix * vec4(a_texcoord, 0, 1)).xy;
 }
 		`,
@@ -346,14 +435,20 @@ void main() {
 	const matrixLocation = gl.getUniformLocation(glProgram, 'u_matrix');
 	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
 	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
+	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
 	const texMatrixLocation = gl.getUniformLocation(
 		glProgram,
 		'u_textureMatrix',
 	);
+	const normalMatrixLocation = gl.getUniformLocation(
+		glProgram,
+		'u_normalMatrix',
+	);
 	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
-	const positionBuffer = gl.createBuffer();
-	const texCoordBuffer = gl.createBuffer();
-	const indicesBuffer = gl.createBuffer();
+	const positionBuffer = createBuffer();
+	const texCoordBuffer = createBuffer();
+	const normalBuffer = createBuffer();
+	const indicesBuffer = createBuffer();
 	const orthographicM = orthographic(0, width, height, 0, -1, 1);
 
 	// The data represents the vertices of a unit square in normalized device coordinates.
@@ -363,9 +458,10 @@ void main() {
 
 	let u_color = whiteColor;
 	let u_texture: WebGLTexture;
-
-	// Initialize the buffer with vertex position data.
-	setPosition(positionBufferData);
+	const u_normalTexture = ColorTexture(gl, blackColor);
+	const u_metallicTexture = ColorTexture(gl, blackColor);
+	const u_roughnessTexture = ColorTexture(gl, blackColor);
+	const u_aoTexture = ColorTexture(gl, whiteColor);
 
 	// Initialize the buffer with texture coordinate data.
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -378,7 +474,7 @@ void main() {
 
 	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
 	gl.enableVertexAttribArray(positionLocation);
-	//gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 	gl.enableVertexAttribArray(texCoordLocation);
 	gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
@@ -388,21 +484,83 @@ void main() {
 
 	gl.uniformMatrix4fv(texMatrixLocation, false, M);
 	gl.uniformMatrix4fv(matrixLocation, false, M);
+	gl.uniformMatrix4fv(normalMatrixLocation, false, M);
 
 	gl.uniform4fv(colorLocation, u_color);
+
+	const normalTextureLoc = gl.getUniformLocation(
+		glProgram,
+		'u_normalTexture',
+	);
+	const metallicLoc = gl.getUniformLocation(glProgram, 'u_metallicTexture');
+	const roughnessLoc = gl.getUniformLocation(glProgram, 'u_roughnessTexture');
+	const aoLoc = gl.getUniformLocation(glProgram, 'u_aoTexture');
+	const lightPosLoc = gl.getUniformLocation(glProgram, 'u_lightPosition');
+	const cameraPosLoc = gl.getUniformLocation(glProgram, 'u_cameraPosition');
+
+	// Example of setting the uniforms
+	gl.uniform3fv(lightPosLoc, [0.5, 0.5, 1.0]);
+	gl.uniform3fv(cameraPosLoc, [0.0, 0.0, 1.0]);
+
+	function createBuffer() {
+		const buffer = gl.createBuffer();
+		if (!buffer) throw new Error('Could not create buffer');
+		return buffer;
+	}
+
+	function bindTexture(
+		texture: WebGLTexture,
+		location: WebGLUniformLocation,
+		unit: number,
+	) {
+		gl.activeTexture(gl.TEXTURE0 + unit);
+		gl.bindTexture(gl.TEXTURE_2D, texture);
+		gl.uniform1i(location, unit);
+	}
+
+	// Bind PBR textures
+	if (normalTextureLoc) bindTexture(u_normalTexture, normalTextureLoc, 1);
+	if (metallicLoc) bindTexture(u_metallicTexture, metallicLoc, 2);
+	if (roughnessLoc) bindTexture(u_roughnessTexture, roughnessLoc, 3);
+	if (aoLoc) bindTexture(u_aoTexture, aoLoc, 4);
 
 	gl.viewport(0, 0, width, height);
 	setProjectionMatrix(orthographicM);
 	gl.activeTexture(gl.TEXTURE0);
 
+	resetPosition();
+
 	function setProjectionMatrix(m: Matrix) {
 		gl.uniformMatrix4fv(pmatrixLocation, false, m);
 	}
 
-	function setPosition(data: ArrayBuffer | ArrayBufferView, size = 2) {
-		gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-		gl.vertexAttribPointer(positionLocation, size, gl.FLOAT, false, 0, 0);
+	function setNormalMatrix(m: Matrix) {
+		gl.uniformMatrix4fv(normalMatrixLocation, false, m);
+	}
+
+	function setArrayBuffer(
+		buffer: WebGLBuffer,
+		location: number,
+		{ data, size, normalized, type, stride, offset }: ArrayBufferOptions,
+	) {
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.vertexAttribPointer(
+			location,
+			size ?? 2,
+			type ?? gl.FLOAT,
+			normalized ?? false,
+			stride ?? 0,
+			offset ?? 0,
+		);
 		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
+
+	function setPosition(options: ArrayBufferOptions) {
+		setArrayBuffer(positionBuffer, positionLocation, options);
+	}
+	function setNormal(options: ArrayBufferOptions) {
+		options.size ??= 3;
+		setArrayBuffer(normalBuffer, normalLocation, options);
 	}
 
 	function setIndices(data: ArrayBuffer | ArrayBufferView) {
@@ -415,6 +573,10 @@ void main() {
 			gl.bindTexture(gl.TEXTURE_2D, texture);
 			u_texture = texture;
 		}
+	}
+
+	function resetPosition() {
+		setPosition({ data: positionBufferData });
 	}
 
 	return {
@@ -439,12 +601,13 @@ void main() {
 			if (color !== u_color)
 				gl.uniform4fv(colorLocation, (u_color = color));
 		},
-		resetPosition() {
-			setPosition(positionBufferData);
-		},
+
 		setIndices,
 		setPosition,
+		setNormal,
 		setProjectionMatrix,
+		setNormalMatrix,
+		resetPosition,
 		resetProjectionMatrix() {
 			setProjectionMatrix(orthographicM);
 		},
@@ -563,7 +726,7 @@ export interface EngineOptions<T> {
 export async function engine<T extends Node>(p: EngineOptions<T>) {
 	const program = webgl2(p);
 	const { render, start, stop } = renderer();
-	const whiteTexture = program.createColorTexture([255, 255, 255, 255]);
+	const whiteTexture = program.createColorTexture(whiteColor);
 	const canvas = program.canvas as HTMLCanvasElement;
 
 	if (p.container) {
