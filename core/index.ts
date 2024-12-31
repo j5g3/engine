@@ -383,12 +383,12 @@ void main() {
     vec3 normal = normalize(texture(u_normalTexture, v_texcoord).rgb * 2.0 - 1.0);
     float metallic = texture(u_metallicTexture, v_texcoord).r;
     float roughness = texture(u_roughnessTexture, v_texcoord).r;
-    float ao = texture(u_aoTexture, v_texcoord).r; // Use the correct texture
+    float ao = texture(u_aoTexture, v_texcoord).r;
 
 	outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
 }
 `,
-		vtx: `#version 300 es
+		/*vtx: `#version 300 es
 precision mediump float;
 
 in vec4 a_position;
@@ -409,6 +409,34 @@ void main() {
    v_position = gl_Position.xyz;
    v_normal = normalize(vec3(u_normalMatrix * vec4(a_normal, 0.0)));
    v_texcoord = (u_textureMatrix * vec4(a_texcoord, 0, 1)).xy;
+}
+		`*/
+		vtx: `#version 300 es
+precision highp float;
+
+in vec3 a_position;
+in vec3 a_normal;
+in vec2 a_texcoord;
+in vec3 a_tangent;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat3 u_normalMatrix;
+
+out vec3 v_position;
+out vec3 v_normal;
+out vec2 v_texcoord;
+out vec3 v_tangent;
+
+void main() {
+    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
+    vPosition = worldPosition.xyz;
+    vNormal = normalize(uNormalMatrix * aNormal);
+    vTangent = normalize(uNormalMatrix * aTangent);
+    vTexCoord = aTexCoord;
+
+    gl_Position = uProjection * uView * worldPosition;
 }
 		`,
 		width,
