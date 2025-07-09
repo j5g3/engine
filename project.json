@@ -4,6 +4,10 @@
 			"core": {
 				"files": ["core/*"],
 				"tasks": "npm run build --prefix core"
+			},
+			"demo": {
+				"files": ["demo/*"],
+				"tasks": "npm run build --prefix demo"
 			}
 		}
 	}

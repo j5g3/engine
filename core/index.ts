@@ -1,5 +1,4 @@
-///<amd-module name="@j5g3/core"/>
-import type { Gltf } from './gltf.js';
+//import type { Gltf } from './gltf.js';
 
 export interface Rect {
 	x: number;
@@ -19,7 +18,7 @@ export interface Box extends Rect {
 }
 
 export type Matrix = Float32Array;
-export type Color = [number, number, number, number];
+export type Color = readonly [number, number, number, number];
 
 export type ArrayBufferOptions = {
 	data: ArrayBuffer;
@@ -30,11 +29,40 @@ export type ArrayBufferOptions = {
 	offset?: number;
 };
 
+export type Mutable = { dirty?: boolean };
+export type TextureComponent = TextureOptions & {
+	src: TexImageSource;
+} & Mutable;
+export type ImageComponent = Omit<TextureOptions, 'src'> & {
+	readonly src: string | TexImageSource;
+};
+export type FillComponent = {
+	color: Color;
+} & Mutable;
+export type BoxComponent = Partial<Box> & Mutable;
+export type UpdateFn = string | ((node: Node) => void);
+export type WebglContext = ReturnType<typeof webgl2>;
+export type DrawEngine = ReturnType<typeof drawEngine>;
+
+export interface Node {
+	box?: BoxComponent;
+	image?: ImageComponent;
+	texture?: TextureComponent;
+	children?: Record<string | number, Node>;
+	update?: UpdateFn;
+	fill?: FillComponent;
+	//model?: ModelComponent;
+}
+
+/*export interface ModelComponent {
+	gltf: Gltf;
+}*/
+
 export const identity = new Float32Array([
 	1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ]) as Readonly<Matrix>;
-export const whiteColor: Color = [1, 1, 1, 1];
-export const blackColor: Color = [0, 0, 0, 1];
+export const whiteColor: Color = [1, 1, 1, 1] as const;
+export const blackColor: Color = [0, 0, 0, 1] as const;
 
 export function Matrix(m?: number[]) {
 	return m ? new Float32Array(m) : identity.slice(0);
@@ -61,6 +89,15 @@ export function loadImage(src: string) {
 		img.addEventListener('load', () => resolve(img));
 		img.addEventListener('error', () => reject(img));
 	});
+}
+
+export function intersect(a: Rect, b: Rect) {
+	return !(
+		a.x + a.w <= b.x ||
+		a.x >= b.x + b.w ||
+		a.y + a.h <= b.y ||
+		a.y >= b.y + b.h
+	);
 }
 
 /**
@@ -133,15 +170,14 @@ export function orthographic(
 export function Program({
 	frag,
 	vtx,
-	width,
-	height,
+	canvas,
 }: {
 	frag: string;
 	vtx: string;
-	width: number;
-	height: number;
+	canvas: HTMLCanvasElement | OffscreenCanvas;
 }) {
-	const gl = createCanvasContext(width, height);
+	const gl = canvas.getContext('webgl2')!;
+	if (!gl) throw new Error('Could not create webgl2 canvas context');
 	const glProgram = gl.createProgram();
 	if (!glProgram) throw new Error('Could not create WebGL Program');
 
@@ -305,9 +341,13 @@ function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
  * It also provides methods for manipulating the model-view matrix (`pushMatrix` and `popMatrix`)
  * for transformations.
  */
-export function webgl2({ width, height }: { width: number; height: number }) {
+export function webgl2({
+	canvas,
+}: {
+	canvas: OffscreenCanvas | HTMLCanvasElement;
+}) {
 	const { gl, glProgram } = Program({
-		frag: `#version 300 es
+		/*frag: `#version 300 es
 precision mediump float;
 
 in vec3 v_normal;
@@ -386,31 +426,103 @@ void main() {
     float ao = texture(u_aoTexture, v_texcoord).r;
 
 	outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
-}
-`,
-		/*vtx: `#version 300 es
+}*/
+		frag: `#version 300 es
 precision mediump float;
 
-in vec4 a_position;
-in vec3 a_normal;
-in vec2 a_texcoord;
+in vec3 v_normal;
+in vec3 v_position;
+in vec2 v_texcoord;
+in vec3 v_tangent;  
 
-uniform mat4 u_matrix;
-uniform mat4 p_matrix;
-uniform mat4 u_textureMatrix;
-uniform mat4 u_normalMatrix;
+uniform sampler2D u_texture;
+uniform sampler2D u_normalTexture;
+uniform sampler2D u_metallicTexture;
+uniform sampler2D u_roughnessTexture;
+uniform sampler2D u_aoTexture;
+uniform vec3 u_lightPosition;
+uniform vec3 u_cameraPosition;
+uniform vec4 u_color;
 
-out vec2 v_texcoord;
-out vec3 v_normal;
-out vec3 v_position;
+out vec4 outColor;
+
+#define PI 3.14159265359
+
+// Function to transform normal from tangent space to world space
+vec3 getNormalFromMap() {
+    vec3 tangentNormal = texture(u_normalTexture, v_texcoord).rgb * 2.0 - 1.0;
+    
+    vec3 N = normalize(v_normal);
+    vec3 T = normalize(v_tangent);
+    vec3 B = normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+    
+    return normalize(TBN * tangentNormal);
+}
+
+vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, vec3 normal, vec3 fragPos) {
+    vec3 lightColor = vec3(1.0);
+    vec3 lightDir = normalize(u_lightPosition - fragPos);
+    vec3 viewDir = normalize(u_cameraPosition - fragPos);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    
+    float distance = max(length(u_lightPosition - fragPos), 1e-6);
+    float attenuation = 1.0 / (distance * distance);
+    vec3 radiance = lightColor * attenuation;
+    
+    // Ambient
+    vec4 ambient = ao * albedo;
+    
+    // Diffuse (Lambertian)
+    float dotNormalLight = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = dotNormalLight * albedo.rgb;
+    
+    // Specular (Cook-Torrance BRDF)
+    float roughnessSq = roughness * roughness;
+    
+    // Avoid division by zero
+    float NdotH = max(dot(normal, halfwayDir), 0.0001);
+    float dotNormalView = max(dot(normal, viewDir), 0.0001);
+    float VdotH = max(dot(viewDir, halfwayDir), 0.0001);
+    
+    // Distribution (Trowbridge-Reitz / GGX)
+    float nom = roughnessSq;
+    float denom = (NdotH * NdotH * (roughnessSq - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    float distribution = nom / max(denom, 1e-6);
+    
+    // Fresnel-Schlick approximation with metallic
+    vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
+    // Fixed: Use VdotH instead of dot(normal, viewDir)
+    vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+    
+    // Geometry (Smith's method with Schlick-GGX)
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float GGX1 = dotNormalView / (dotNormalView * (1.0 - k) + k);
+    float GGX2 = dotNormalLight / (dotNormalLight * (1.0 - k) + k);
+    float geometry = GGX1 * GGX2;
+    
+    vec3 specular = (distribution * geometry * fresnel) / max(4.0 * dotNormalLight * dotNormalView, 0.0001);
+    
+    // Only add specular if dotNormalLight is positive
+    vec3 finalSpecular = dotNormalLight > 0.0 ? specular : vec3(0.0);
+    
+    return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
+}
 
 void main() {
-   gl_Position = p_matrix * u_matrix * a_position;
-   v_position = gl_Position.xyz;
-   v_normal = normalize(vec3(u_normalMatrix * vec4(a_normal, 0.0)));
-   v_texcoord = (u_textureMatrix * vec4(a_texcoord, 0, 1)).xy;
+    vec4 albedo = texture(u_texture, v_texcoord) * u_color;
+    
+    // Use the proper normal map transformation
+    vec3 normal = getNormalFromMap();
+    
+    float metallic = texture(u_metallicTexture, v_texcoord).r;
+    float roughness = texture(u_roughnessTexture, v_texcoord).r;
+    float ao = texture(u_aoTexture, v_texcoord).r;
+    
+    outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
 }
-		`*/
+`,
 		vtx: `#version 300 es
 precision highp float;
 
@@ -422,7 +534,7 @@ in vec3 a_tangent;
 uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
-uniform mat3 u_normalMatrix;
+uniform mat4 u_normalMatrix;
 
 out vec3 v_position;
 out vec3 v_normal;
@@ -430,19 +542,17 @@ out vec2 v_texcoord;
 out vec3 v_tangent;
 
 void main() {
-    vec4 worldPosition = uModel * vec4(aPosition, 1.0);
-    vPosition = worldPosition.xyz;
-    vNormal = normalize(uNormalMatrix * aNormal);
-    vTangent = normalize(uNormalMatrix * aTangent);
-    vTexCoord = aTexCoord;
+    vec4 worldPosition = u_model * vec4(a_position, 1.0);
+    v_position = worldPosition.xyz;
+    v_normal = normalize(mat3(u_normalMatrix) * a_normal);
+    v_tangent = normalize(mat3(u_model) * a_tangent);
+    v_texcoord = a_texcoord;
 
-    gl_Position = uProjection * uView * worldPosition;
+    gl_Position = u_projection * u_view * worldPosition;
 }
 		`,
-		width,
-		height,
+		canvas,
 	});
-
 	gl.useProgram(glProgram);
 
 	// Set the clear color to transparent black.
@@ -459,25 +569,37 @@ void main() {
 	// Enable blending to allow transparency in the shader.
 	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-	const pmatrixLocation = gl.getUniformLocation(glProgram, 'p_matrix');
-	const matrixLocation = gl.getUniformLocation(glProgram, 'u_matrix');
-	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
-	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
-	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
-	const texMatrixLocation = gl.getUniformLocation(
-		glProgram,
-		'u_textureMatrix',
-	);
+	const modelLocation = gl.getUniformLocation(glProgram, 'u_model');
+	const viewLocation = gl.getUniformLocation(glProgram, 'u_view');
+	const projectionLocation = gl.getUniformLocation(glProgram, 'u_projection');
 	const normalMatrixLocation = gl.getUniformLocation(
 		glProgram,
 		'u_normalMatrix',
 	);
+	const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
+
+	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
+	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
+	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
+	/*const texMatrixLocation = gl.getUniformLocation(
+		glProgram,
+		'u_textureMatrix',
+	);*/
 	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
+	const tangentLocation = gl.getAttribLocation(glProgram, 'a_tangent');
+	const tangentBuffer = createBuffer();
 	const positionBuffer = createBuffer();
 	const texCoordBuffer = createBuffer();
 	const normalBuffer = createBuffer();
 	const indicesBuffer = createBuffer();
-	const orthographicM = orthographic(0, width, height, 0, -1, 1);
+	const orthographicM = orthographic(
+		0,
+		gl.canvas.width,
+		gl.canvas.height,
+		0,
+		-1,
+		1,
+	);
 
 	// The data represents the vertices of a unit square in normalized device coordinates.
 	const positionBufferData = new Float32Array([
@@ -496,12 +618,89 @@ void main() {
 	gl.bufferData(
 		gl.ARRAY_BUFFER,
 		// The data represents the vertices of a unit square in normalized texture coordinates.
-		new Float32Array([0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]),
+		//new Float32Array([0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]),
+		new Float32Array([
+			// First triangle
+			0,
+			1, // Bottom-left
+			1,
+			1, // Bottom-right
+			0,
+			0, // Top-left
+
+			// Second triangle
+			0,
+			0, // Top-left
+			1,
+			1, // Bottom-right
+			1,
+			0, // Top-right
+		]),
 		gl.STATIC_DRAW,
 	);
+	const tangentData = new Float32Array([
+		1,
+		0,
+		0, // Bottom-left
+		1,
+		0,
+		0, // Top-left
+		1,
+		0,
+		0, // Bottom-right
+		1,
+		0,
+		0, // Top-right
+		1,
+		0,
+		0, // Top-left (for triangle 2)
+		1,
+		0,
+		0, // Bottom-right (for triangle 2)
+	]);
+	const normalData = new Float32Array([
+		0,
+		0,
+		1, // All normals point toward camera
+		0,
+		0,
+		1,
+		0,
+		0,
+		1,
+		0,
+		0,
+		1,
+		0,
+		0,
+		1,
+		0,
+		0,
+		1,
+	]);
 
 	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, positionBufferData, gl.STATIC_DRAW);
 	gl.enableVertexAttribArray(positionLocation);
+	gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
+
+	// Set up normal attribute
+	gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, normalData, gl.STATIC_DRAW);
+	gl.enableVertexAttribArray(normalLocation);
+	gl.vertexAttribPointer(normalLocation, 3, gl.FLOAT, false, 0, 0);
+
+	// Set up tangent attribute
+	gl.bindBuffer(gl.ARRAY_BUFFER, tangentBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, tangentData, gl.STATIC_DRAW);
+	gl.enableVertexAttribArray(tangentLocation);
+	gl.vertexAttribPointer(tangentLocation, 3, gl.FLOAT, false, 0, 0);
+
+	// Set matrices
+	gl.uniformMatrix4fv(modelLocation, false, identity);
+	gl.uniformMatrix4fv(viewLocation, false, identity);
+	gl.uniformMatrix4fv(projectionLocation, false, orthographicM);
+	gl.uniformMatrix4fv(normalMatrixLocation, false, identity);
 
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 	gl.enableVertexAttribArray(texCoordLocation);
@@ -510,11 +709,8 @@ void main() {
 	let M = identity;
 	const matrixStack: Matrix[] = [];
 
-	gl.uniformMatrix4fv(texMatrixLocation, false, M);
-	gl.uniformMatrix4fv(matrixLocation, false, M);
-	gl.uniformMatrix4fv(normalMatrixLocation, false, M);
-
-	gl.uniform4fv(colorLocation, u_color);
+	//gl.uniformMatrix4fv(texMatrixLocation, false, M);
+	gl.uniform4fv(colorLocation, u_color as unknown as number[]);
 
 	const normalTextureLoc = gl.getUniformLocation(
 		glProgram,
@@ -552,14 +748,14 @@ void main() {
 	if (roughnessLoc) bindTexture(u_roughnessTexture, roughnessLoc, 3);
 	if (aoLoc) bindTexture(u_aoTexture, aoLoc, 4);
 
-	gl.viewport(0, 0, width, height);
+	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 	setProjectionMatrix(orthographicM);
 	gl.activeTexture(gl.TEXTURE0);
 
 	resetPosition();
 
 	function setProjectionMatrix(m: Matrix) {
-		gl.uniformMatrix4fv(pmatrixLocation, false, m);
+		gl.uniformMatrix4fv(projectionLocation, false, m);
 	}
 
 	function setNormalMatrix(m: Matrix) {
@@ -598,7 +794,7 @@ void main() {
 
 	function setTexture(texture: WebGLTexture) {
 		if (u_texture !== texture) {
-			gl.bindTexture(gl.TEXTURE_2D, texture);
+			if (textureLocation) bindTexture(texture, textureLocation, 0);
 			u_texture = texture;
 		}
 	}
@@ -607,27 +803,40 @@ void main() {
 		setPosition({ data: positionBufferData });
 	}
 
+	function resizeViewport(width: number, height: number) {
+		gl.viewport(0, 0, width, height);
+	}
+
+	function clear() {
+		gl.clearColor(0, 0, 0, 0);
+	}
+
 	return {
 		canvas: gl.canvas,
+		clear,
+		resizeViewport,
 		pushMatrix(m: Matrix) {
 			matrixStack.push(M);
 			if (m !== identity) {
 				M = M === identity ? m : multiply(M, m);
-				gl.uniformMatrix4fv(matrixLocation, false, M);
+				gl.uniformMatrix4fv(modelLocation, false, M);
 			}
 		},
 		popMatrix() {
 			const M2 = matrixStack.pop();
 			if (!M2) throw new Error('Matrix stack empty');
 			M = M2;
-			gl.uniformMatrix4fv(matrixLocation, false, M2);
+			gl.uniformMatrix4fv(modelLocation, false, M2);
 		},
 		get color() {
 			return u_color;
 		},
 		set color(color: Color) {
 			if (color !== u_color)
-				gl.uniform4fv(colorLocation, (u_color = color));
+				gl.uniform4fv(
+					colorLocation,
+					(u_color = color) as unknown as number[],
+				);
 		},
 
 		setIndices,
@@ -713,37 +922,298 @@ export function Box(box?: Partial<Box>) {
 	};
 }
 
-export type Mutable = { dirty?: boolean };
-export type TextureComponent = TextureOptions & {
-	src: TexImageSource;
-} & Mutable;
-export type ImageComponent = Omit<TextureOptions, 'src'> & {
-	readonly src: string | TexImageSource;
-};
-export type FillComponent = {
-	color: Color;
-} & Mutable;
-export type BoxComponent = Partial<Box> & Mutable;
-export type UpdateFn = string | ((node: Node) => void);
-export type WebglContext = ReturnType<typeof webgl2>;
+export function drawEngine(ctx: WebglContext) {
+	function color(newColor: Color) {
+		ctx.setTexture(whiteTexture);
+		ctx.color = newColor;
+	}
 
-export interface Node {
-	box?: BoxComponent;
-	image?: ImageComponent;
-	texture?: TextureComponent;
-	children?: Record<string | number, Node>;
-	update?: UpdateFn;
-	fill?: FillComponent;
-	model?: ModelComponent;
-}
+	function pushDraw(m: Matrix) {
+		ctx.pushMatrix(m);
+		ctx.draw();
+		ctx.popMatrix();
+	}
 
-export interface ModelComponent {
-	gltf: Gltf;
+	function putpixel(x: number, y: number) {
+		PIXEL_M[12] = (x - viewMinX) * viewScaleX;
+		PIXEL_M[13] = (y - viewMinY) * viewScaleY;
+		pushDraw(PIXEL_M);
+	}
+
+	function line(x0: number, y0: number, x1: number, y1: number) {
+		const nx0 = (x0 - viewMinX) * viewScaleX;
+		const ny0 = (y0 - viewMinY) * viewScaleY;
+		const nx1 = (x1 - viewMinX) * viewScaleX;
+		const ny1 = (y1 - viewMinY) * viewScaleY;
+
+		const d = Math.hypot(nx1 - nx0, ny1 - ny0);
+		const a = Math.atan2(ny1 - ny0, nx1 - nx0);
+
+		LINE_BOX.x = nx0; // - unitXHalf;
+		LINE_BOX.y = ny0; //- unitYHalf;
+		LINE_BOX.w = d;
+		LINE_BOX.rotation = a;
+
+		composeBox(LINE_BOX, LINE_M);
+		pushDraw(LINE_M);
+	}
+
+	function rect(x: number, y: number, w: number, h: number) {
+		if (w < 0) {
+			x = x + w;
+			w = -w;
+		}
+		if (h < 0) {
+			y = y + h;
+			h = -h;
+		}
+		scaleM(RECT_M, x, y, w, h);
+		const nw = RECT_M[0];
+		const nh = RECT_M[5];
+		const nx = RECT_M[12];
+		const ny = RECT_M[13];
+		RECT_M[5] = unitY;
+		pushDraw(RECT_M);
+
+		RECT_M[13] = ny + nh - unitY;
+		pushDraw(RECT_M);
+
+		RECT_M[0] = unitX;
+		RECT_M[5] = unitY - nh;
+		pushDraw(RECT_M);
+
+		RECT_M[12] = nx + nw - unitX;
+		pushDraw(RECT_M);
+	}
+
+	function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
+		m[0] = w * viewScaleX;
+		m[5] = h * viewScaleY;
+		m[12] = (x - viewMinX) * viewScaleX;
+		m[13] = (y - viewMinY) * viewScaleY;
+	}
+
+	function fillRect(x: number, y: number, w: number, h: number) {
+		scaleM(RECT_M, x, y, w, h);
+		pushDraw(RECT_M);
+	}
+
+	function arc(
+		x0: number,
+		y0: number,
+		r: number,
+		start: number,
+		stop: number,
+		_aspect: number,
+	) {
+		const interval = Math.PI / r / 4;
+		start = start % (Math.PI * 2);
+		stop = stop % (Math.PI * 2);
+
+		if (start >= stop) stop += Math.PI * 2;
+		let px = x0 + Math.cos(start) * r;
+		let py = y0 - Math.sin(start) * r;
+		for (let i = start + interval; i < stop; i += interval) {
+			line(
+				px,
+				py,
+				(px = x0 + Math.cos(i) * r),
+				(py = y0 - Math.sin(i) * r),
+			);
+		}
+	}
+	function circle(x0: number, y0: number, radius: number) {
+		arc(x0, y0, radius, 0, 2 * Math.PI, 1);
+		/*const ux = 2 * unitX;
+		const uy = 2 * unitY;
+
+		let f = 1 - radius;
+		let dx = 0;
+		let dy = -2 * radius;
+		let x = 0;
+		let y = radius;
+
+		putpixel(x0, y0 + radius, color);
+		putpixel(x0, y0 - radius, color);
+		putpixel(x0 + radius, y0, color);
+		putpixel(x0 - radius, y0, color);
+
+		while (x < y) {
+			if (f >= 0) {
+				y -= unitY;
+				dy += uy;
+				f += dy;
+			}
+			x += unitX;
+			dx += ux;
+			f += dx + unitX;
+
+			putpixel(x0 + x, y0 + y, color);
+			putpixel(x0 - x, y0 + y, color);
+			putpixel(x0 + x, y0 - y, color);
+			putpixel(x0 - x, y0 - y, color);
+
+			if (x !== y) {
+				putpixel(x0 + y, y0 + x, color);
+				putpixel(x0 - y, y0 + x, color);
+				putpixel(x0 + y, y0 - x, color);
+				putpixel(x0 - y, y0 - x, color);
+			}
+		}*/
+	}
+
+	/*function readScreen() {
+		if (!screenTexture) {
+			screenTexture = ctx.frag.createTexture();
+			screenData = new ImageData(ctx.width, ctx.height);
+		}
+		ctx.frag.readPixels(screenData.data);
+		return screenData;
+	}
+
+	function drawScreen(image: ImageData) {
+		RECT_M[0] = image.width;
+		RECT_M[5] = image.height;
+		RECT_M[12] = 0;
+		RECT_M[13] = 0;
+		const hasWindow = windowActive;
+
+		if (hasWindow) resetWindow();
+		ctx.vtx.pushMatrix(RECT_M);
+		ctx.frag.updateTexture(screenTexture, image);
+		ctx.frag.setColor(WhiteColor);
+		ctx.draw();
+		ctx.vtx.popMatrix();
+		if (hasWindow) restoreWindow();
+	}
+
+	function boundaryFill(x: number, y: number, color: Color, border = color) {
+		readScreen();
+		softBoundaryFill(
+			screenData,
+			windowActive ? getScreenX(x) : Math.round(x),
+			windowActive ? getScreenY(y) : Math.round(y),
+			color,
+			border
+		);
+		drawScreen(screenData);
+	}
+
+	function floodFill(x: number, y: number, color: Color) {
+		readScreen();
+		softFloodFill(
+			screenData,
+			windowActive ? getScreenX(x) : Math.round(x),
+			windowActive ? getScreenY(y) : Math.round(y),
+			color
+		);
+		drawScreen(screenData);
+	}*/
+
+	function draw2DTexture(
+		texture: WebGLTexture,
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+	) {
+		scaleM(RECT_M, x, y, w, h);
+		ctx.setTexture(texture);
+		ctx.color = whiteColor;
+		pushDraw(RECT_M);
+	}
+
+	/*function drawImage(
+		src: TexImageSource,
+		x: number,
+		y: number,
+		w: number,
+		h: number
+	) {
+		if (!drawTexture) drawTexture = ctx.createTexture(src);
+		else ctx.updateTexture(drawTexture, src);
+		draw2DTexture(drawTexture, x, y, w, h);
+	}*/
+
+	/**
+	 * Sets a custom orthographic projection matrix defining a rendering window.
+	 * Updates internal parameters to map logical coordinates into normalized device coordinates,
+	 * allowing rendering to be confined within the specified subregion of the canvas.
+	 */
+	function window(x: number, y: number, x2: number, y2: number) {
+		windowM = orthographic(0, 1, 0, 1, -1, 1);
+		viewMinX = x;
+		viewMinY = y;
+		viewScaleX = 1 / (x2 - x);
+		viewScaleY = 1 / (y2 - y);
+		prevUnitX = 1 / ctx.canvas.width;
+		prevUnitY = 1 / ctx.canvas.height;
+		console.log(ctx.canvas.width, ctx.canvas.height);
+
+		restoreWindow();
+	}
+
+	function restoreWindow() {
+		PIXEL_M[0] = unitX = prevUnitX;
+		PIXEL_M[5] = unitY = prevUnitY;
+		LINE_BOX.h = unitY;
+		LINE_BOX.cx = /*unitXHalf =*/ unitX / 2;
+		LINE_BOX.cy = /*unitYHalf =*/ unitY / 2;
+		ctx.setProjectionMatrix(windowM);
+	}
+
+	function resetWindow() {
+		window(0, 0, ctx.canvas.width, ctx.canvas.height);
+		/*viewScaleX = viewScaleY = PIXEL_M[0] = PIXEL_M[5] = unitX = unitY = LINE_BOX.h = 1;
+		unitXHalf = unitYHalf = LINE_BOX.cx = LINE_BOX.cy = 0.5;
+		viewMinX = viewMinY = 0;
+		
+		ctx.setProjectionMatrix(
+			orthographic(0, ctx.canvas.width, ctx.canvas.height, 0, -1, 1),
+		);*/
+	}
+
+	const PIXEL_M = Matrix();
+	const LINE_M = Matrix();
+	const RECT_M = Matrix();
+	const LINE_BOX = Box();
+	const whiteTexture = ctx.createColorTexture(whiteColor);
+
+	let windowM = Matrix();
+	let unitX = 1,
+		unitY = 1,
+		//unitXHalf = 0.5,
+		//unitYHalf = 0.5,
+		prevUnitX = 1,
+		prevUnitY = 1;
+	let viewMinX = 0,
+		viewMinY = 0;
+	let viewScaleX = 1,
+		viewScaleY = 1;
+
+	PIXEL_M[0] = 1;
+	PIXEL_M[5] = 1;
+	LINE_BOX.h = 1;
+	LINE_BOX.cx = 0.5;
+	LINE_BOX.cy = 0.5;
+
+	return {
+		color,
+		putpixel,
+		draw2DTexture,
+		line,
+		rect,
+		fillRect,
+		arc,
+		circle,
+		window,
+		resetWindow,
+		restoreWindow,
+	};
 }
 
 export interface EngineOptions<T> {
-	width: number;
-	height: number;
+	canvas: HTMLCanvasElement | OffscreenCanvas;
 	readonly root: T;
 	// Defaults to false
 	autoStart?: boolean;
@@ -808,27 +1278,26 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 		});
 	}
 
-	async function model(model: ModelComponent) {
+	/*async function model(model: ModelComponent) {
 		const { gltf } = await import('./gltf.js');
 		render(await gltf(program, model.gltf));
-	}
+	}*/
 
 	async function load(node: Node) {
 		const { update } = node;
 
 		if (update) {
-			const fn = (
+			const fn =
 				typeof update === 'function'
 					? update
-					: new Function('node', update)
-			)(node);
-			render(fn);
+					: new Function('node', update);
+			render(() => fn(node));
 		}
 		if (node.box) boxComponent(node.box);
 		if (node.fill) fill(node.fill);
 		if (node.texture) texture(node.texture);
 		if (node.image) await image(node.image);
-		if (node.model) await model(node.model);
+		//if (node.model) await model(node.model);
 
 		if (node.children) {
 			const nodes = Array.isArray(node.children)
