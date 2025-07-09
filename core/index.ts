@@ -346,87 +346,80 @@ export function webgl2({
 }: {
 	canvas: OffscreenCanvas | HTMLCanvasElement;
 }) {
+	function createBuffer() {
+		const buffer = gl.createBuffer();
+		if (!buffer) throw new Error('Could not create buffer');
+		return buffer;
+	}
+
+	function bindTexture(
+		texture: WebGLTexture,
+		location: WebGLUniformLocation,
+		unit: number,
+	) {
+		gl.activeTexture(gl.TEXTURE0 + unit);
+		gl.bindTexture(gl.TEXTURE_2D, texture);
+		gl.uniform1i(location, unit);
+	}
+
+	function setProjectionMatrix(m: Matrix) {
+		gl.uniformMatrix4fv(projectionLocation, false, m);
+	}
+
+	function setNormalMatrix(m: Matrix) {
+		gl.uniformMatrix4fv(normalMatrixLocation, false, m);
+	}
+
+	function setArrayBuffer(
+		buffer: WebGLBuffer,
+		location: number,
+		{ data, size, normalized, type, stride, offset }: ArrayBufferOptions,
+	) {
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.vertexAttribPointer(
+			location,
+			size ?? 2,
+			type ?? gl.FLOAT,
+			normalized ?? false,
+			stride ?? 0,
+			offset ?? 0,
+		);
+		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
+
+	function setPosition(options: ArrayBufferOptions) {
+		setArrayBuffer(positionBuffer, positionLocation, options);
+	}
+	function setNormal(options: ArrayBufferOptions) {
+		options.size ??= 3;
+		setArrayBuffer(normalBuffer, normalLocation, options);
+	}
+
+	function setIndices(data: ArrayBuffer | ArrayBufferView) {
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
+
+	function setTexture(texture: WebGLTexture) {
+		if (u_texture !== texture) {
+			if (textureLocation) bindTexture(texture, textureLocation, 0);
+			u_texture = texture;
+		}
+	}
+
+	function resetPosition() {
+		setPosition({ data: positionBufferData });
+	}
+
+	function resizeViewport(width: number, height: number) {
+		gl.viewport(0, 0, width, height);
+	}
+
+	function clear() {
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	}
+
 	const { gl, glProgram } = Program({
-		/*frag: `#version 300 es
-precision mediump float;
-
-in vec3 v_normal;
-in vec3 v_position;
-in vec2 v_texcoord;
-
-uniform sampler2D u_texture;
-uniform sampler2D u_normalTexture;
-uniform sampler2D u_metallicTexture;
-uniform sampler2D u_roughnessTexture;
-uniform sampler2D u_aoTexture;
-
-uniform vec3 u_lightPosition;
-uniform vec3 u_cameraPosition;
-uniform vec4 u_color;
-
-out vec4 outColor;
-
-#define PI 3.14159265359
-
-vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, vec3 normal, vec3 fragPos) {
-    vec3 lightColor = vec3(1.0);
-    vec3 lightDir = normalize(u_lightPosition - fragPos);
-    vec3 viewDir = normalize(u_cameraPosition - fragPos);
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-
-    float distance = max(length(u_lightPosition - fragPos), 1e-6);
-    float attenuation = 1.0 / (distance * distance);
-    vec3 radiance = lightColor * attenuation;
-
-    // Ambient
-    vec4 ambient = ao * albedo;
-
-    // Diffuse (Lambertian)
-    float dotNormalLight = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = dotNormalLight * albedo.rgb;
-
-    // Specular (Cook-Torrance BRDF)
-    float roughnessSq = roughness * roughness;
-
-    // Avoid division by zero
-    float NdotH = max(dot(normal, halfwayDir), 0.0001);
-    float dotNormalView = max(dot(normal, viewDir), 0.0001);
-    float VdotH = max(dot(viewDir, halfwayDir), 0.0001);
-
-    // Distribution (Trowbridge-Reitz / GGX)
-    float nom   = roughnessSq;
-    float denom = (NdotH * NdotH * (roughnessSq - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    float distribution = nom / max(denom, 1e-6);
-
-    // Fresnel-Schlick approximation with metallic
-	vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
-	float cosTheta = max(dot(normal, viewDir), 0.0);
-	vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
-
-    // Geometry (Smith's method with Schlick-GGX)
-    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-    float GGX1 = dotNormalView / (dotNormalView * (1.0 - k) + k);
-    float GGX2 = dotNormalLight / (dotNormalLight * (1.0 - k) + k);
-    float geometry = GGX1 * GGX2;
-
-	vec3 specular = (distribution * geometry * fresnel) / max(4.0 * dotNormalLight * dotNormalView, 0.0001);
-
-    // Only add specular if dotNormalLight is positive
-    vec3 finalSpecular = dotNormalLight > 0.0 ? specular : vec3(0.0);
-
-    return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
-}
-
-void main() {
-    vec4 albedo = texture(u_texture, v_texcoord) * u_color;
-    vec3 normal = normalize(texture(u_normalTexture, v_texcoord).rgb * 2.0 - 1.0);
-    float metallic = texture(u_metallicTexture, v_texcoord).r;
-    float roughness = texture(u_roughnessTexture, v_texcoord).r;
-    float ao = texture(u_aoTexture, v_texcoord).r;
-
-	outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
-}*/
 		frag: `#version 300 es
 precision mediump float;
 
@@ -555,11 +548,8 @@ void main() {
 	});
 	gl.useProgram(glProgram);
 
-	// Set the clear color to transparent black.
 	gl.clearColor(0, 0, 0, 0);
-	// Clear the color and depth buffers.
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-	// Enable blending to allow transparency in the shader.
 	gl.enable(gl.BLEND);
 
 	// Tell WebGL to pre-multiply alpha so that we can use the alpha value as the
@@ -581,10 +571,6 @@ void main() {
 	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
 	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
 	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
-	/*const texMatrixLocation = gl.getUniformLocation(
-		glProgram,
-		'u_textureMatrix',
-	);*/
 	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
 	const tangentLocation = gl.getAttribLocation(glProgram, 'a_tangent');
 	const tangentBuffer = createBuffer();
@@ -618,7 +604,6 @@ void main() {
 	gl.bufferData(
 		gl.ARRAY_BUFFER,
 		// The data represents the vertices of a unit square in normalized texture coordinates.
-		//new Float32Array([0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]),
 		new Float32Array([
 			// First triangle
 			0,
@@ -705,13 +690,9 @@ void main() {
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 	gl.enableVertexAttribArray(texCoordLocation);
 	gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
-
-	let M = identity;
-	const matrixStack: Matrix[] = [];
-
-	//gl.uniformMatrix4fv(texMatrixLocation, false, M);
 	gl.uniform4fv(colorLocation, u_color as unknown as number[]);
 
+	const matrixStack: Matrix[] = [];
 	const normalTextureLoc = gl.getUniformLocation(
 		glProgram,
 		'u_normalTexture',
@@ -722,94 +703,21 @@ void main() {
 	const lightPosLoc = gl.getUniformLocation(glProgram, 'u_lightPosition');
 	const cameraPosLoc = gl.getUniformLocation(glProgram, 'u_cameraPosition');
 
-	// Example of setting the uniforms
+	let M = identity;
+
 	gl.uniform3fv(lightPosLoc, [0.5, 0.5, 1.0]);
 	gl.uniform3fv(cameraPosLoc, [0.0, 0.0, 1.0]);
 
-	function createBuffer() {
-		const buffer = gl.createBuffer();
-		if (!buffer) throw new Error('Could not create buffer');
-		return buffer;
-	}
-
-	function bindTexture(
-		texture: WebGLTexture,
-		location: WebGLUniformLocation,
-		unit: number,
-	) {
-		gl.activeTexture(gl.TEXTURE0 + unit);
-		gl.bindTexture(gl.TEXTURE_2D, texture);
-		gl.uniform1i(location, unit);
-	}
-
-	// Bind PBR textures
 	if (normalTextureLoc) bindTexture(u_normalTexture, normalTextureLoc, 1);
 	if (metallicLoc) bindTexture(u_metallicTexture, metallicLoc, 2);
 	if (roughnessLoc) bindTexture(u_roughnessTexture, roughnessLoc, 3);
 	if (aoLoc) bindTexture(u_aoTexture, aoLoc, 4);
 
 	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-	setProjectionMatrix(orthographicM);
 	gl.activeTexture(gl.TEXTURE0);
 
+	setProjectionMatrix(orthographicM);
 	resetPosition();
-
-	function setProjectionMatrix(m: Matrix) {
-		gl.uniformMatrix4fv(projectionLocation, false, m);
-	}
-
-	function setNormalMatrix(m: Matrix) {
-		gl.uniformMatrix4fv(normalMatrixLocation, false, m);
-	}
-
-	function setArrayBuffer(
-		buffer: WebGLBuffer,
-		location: number,
-		{ data, size, normalized, type, stride, offset }: ArrayBufferOptions,
-	) {
-		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-		gl.vertexAttribPointer(
-			location,
-			size ?? 2,
-			type ?? gl.FLOAT,
-			normalized ?? false,
-			stride ?? 0,
-			offset ?? 0,
-		);
-		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-	}
-
-	function setPosition(options: ArrayBufferOptions) {
-		setArrayBuffer(positionBuffer, positionLocation, options);
-	}
-	function setNormal(options: ArrayBufferOptions) {
-		options.size ??= 3;
-		setArrayBuffer(normalBuffer, normalLocation, options);
-	}
-
-	function setIndices(data: ArrayBuffer | ArrayBufferView) {
-		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
-		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
-	}
-
-	function setTexture(texture: WebGLTexture) {
-		if (u_texture !== texture) {
-			if (textureLocation) bindTexture(texture, textureLocation, 0);
-			u_texture = texture;
-		}
-	}
-
-	function resetPosition() {
-		setPosition({ data: positionBufferData });
-	}
-
-	function resizeViewport(width: number, height: number) {
-		gl.viewport(0, 0, width, height);
-	}
-
-	function clear() {
-		gl.clearColor(0, 0, 0, 0);
-	}
 
 	return {
 		canvas: gl.canvas,
@@ -1024,42 +932,6 @@ export function drawEngine(ctx: WebglContext) {
 	}
 	function circle(x0: number, y0: number, radius: number) {
 		arc(x0, y0, radius, 0, 2 * Math.PI, 1);
-		/*const ux = 2 * unitX;
-		const uy = 2 * unitY;
-
-		let f = 1 - radius;
-		let dx = 0;
-		let dy = -2 * radius;
-		let x = 0;
-		let y = radius;
-
-		putpixel(x0, y0 + radius, color);
-		putpixel(x0, y0 - radius, color);
-		putpixel(x0 + radius, y0, color);
-		putpixel(x0 - radius, y0, color);
-
-		while (x < y) {
-			if (f >= 0) {
-				y -= unitY;
-				dy += uy;
-				f += dy;
-			}
-			x += unitX;
-			dx += ux;
-			f += dx + unitX;
-
-			putpixel(x0 + x, y0 + y, color);
-			putpixel(x0 - x, y0 + y, color);
-			putpixel(x0 + x, y0 - y, color);
-			putpixel(x0 - x, y0 - y, color);
-
-			if (x !== y) {
-				putpixel(x0 + y, y0 + x, color);
-				putpixel(x0 - y, y0 + x, color);
-				putpixel(x0 + y, y0 - x, color);
-				putpixel(x0 - y, y0 - x, color);
-			}
-		}*/
 	}
 
 	/*function readScreen() {
@@ -1148,7 +1020,6 @@ export function drawEngine(ctx: WebglContext) {
 		viewScaleY = 1 / (y2 - y);
 		prevUnitX = 1 / ctx.canvas.width;
 		prevUnitY = 1 / ctx.canvas.height;
-		console.log(ctx.canvas.width, ctx.canvas.height);
 
 		restoreWindow();
 	}
