@@ -176,7 +176,7 @@ export function Program({
 	vtx: string;
 	canvas: HTMLCanvasElement | OffscreenCanvas;
 }) {
-	const gl = canvas.getContext('webgl2')!;
+	const gl = canvas.getContext('webgl2');
 	if (!gl) throw new Error('Could not create webgl2 canvas context');
 	const glProgram = gl.createProgram();
 	if (!glProgram) throw new Error('Could not create WebGL Program');
@@ -523,6 +523,10 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_texcoord;
 in vec3 a_tangent;
+in vec4 a_model0;
+in vec4 a_model1;
+in vec4 a_model2;
+in vec4 a_model31;
 
 uniform mat4 u_model;
 uniform mat4 u_view;
@@ -551,12 +555,7 @@ void main() {
 	gl.clearColor(0, 0, 0, 0);
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	gl.enable(gl.BLEND);
-
-	// Tell WebGL to pre-multiply alpha so that we can use the alpha value as the
-	// final color weight.
 	gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-
-	// Enable blending to allow transparency in the shader.
 	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
 	const modelLocation = gl.getUniformLocation(glProgram, 'u_model');
@@ -571,8 +570,8 @@ void main() {
 	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
 	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
 	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
-	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
 	const tangentLocation = gl.getAttribLocation(glProgram, 'a_tangent');
+	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
 	const tangentBuffer = createBuffer();
 	const positionBuffer = createBuffer();
 	const texCoordBuffer = createBuffer();
