@@ -44,6 +44,15 @@ export type UpdateFn = string | ((node: Node) => void);
 export type WebglContext = ReturnType<typeof webgl2>;
 export type DrawEngine = ReturnType<typeof drawEngine>;
 
+export interface TextureOptions {
+	src?: TexImageSource;
+	internalFormat?: GLenum;
+	minFilter?: GLenum;
+	magFilter?: GLenum;
+	wrapS?: GLenum;
+	wrapT?: GLenum;
+}
+
 export interface Node {
 	box?: BoxComponent;
 	image?: ImageComponent;
@@ -68,10 +77,15 @@ export function Matrix(m?: number[]) {
 	return m ? new Float32Array(m) : identity.slice(0);
 }
 
-export function createCanvas(width: number, height: number) {
+export function createCanvas(
+	width: number,
+	height: number,
+	container?: Element,
+) {
 	const element = document.createElement('canvas');
 	element.width = width;
 	element.height = height;
+	if (container) container.appendChild(element);
 	return element;
 }
 
@@ -276,15 +290,6 @@ export function updateTexture(
 	);
 }
 
-export interface TextureOptions {
-	src?: TexImageSource;
-	internalFormat?: GLenum;
-	minFilter?: GLenum;
-	magFilter?: GLenum;
-	wrapS?: GLenum;
-	wrapT?: GLenum;
-}
-
 /**
  * This function creates a WebGL texture, sets its parameters, and optionally uploads the provided image source.
  */
@@ -388,6 +393,7 @@ export function webgl2({
 	}
 
 	function setPosition(options: ArrayBufferOptions) {
+		options.size ??= 3;
 		setArrayBuffer(positionBuffer, positionLocation, options);
 	}
 	function setNormal(options: ArrayBufferOptions) {
@@ -523,10 +529,10 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_texcoord;
 in vec3 a_tangent;
-in vec4 a_model0;
+/*in vec4 a_model0;
 in vec4 a_model1;
 in vec4 a_model2;
-in vec4 a_model31;
+in vec4 a_model3;*/
 
 uniform mat4 u_model;
 uniform mat4 u_view;
@@ -542,7 +548,7 @@ void main() {
     vec4 worldPosition = u_model * vec4(a_position, 1.0);
     v_position = worldPosition.xyz;
     v_normal = normalize(mat3(u_normalMatrix) * a_normal);
-    v_tangent = normalize(mat3(u_model) * a_tangent);
+    v_tangent = normalize(mat3(u_normalMatrix) * a_tangent);
     v_texcoord = a_texcoord;
 
     gl_Position = u_projection * u_view * worldPosition;
@@ -550,6 +556,7 @@ void main() {
 		`,
 		canvas,
 	});
+
 	gl.useProgram(glProgram);
 
 	gl.clearColor(0, 0, 0, 0);
@@ -586,11 +593,6 @@ void main() {
 		1,
 	);
 
-	// The data represents the vertices of a unit square in normalized device coordinates.
-	const positionBufferData = new Float32Array([
-		0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1,
-	]);
-
 	let u_color = whiteColor;
 	let u_texture: WebGLTexture;
 	const u_normalTexture = ColorTexture(gl, blackColor);
@@ -598,82 +600,32 @@ void main() {
 	const u_roughnessTexture = ColorTexture(gl, blackColor);
 	const u_aoTexture = ColorTexture(gl, whiteColor);
 
-	// Initialize the buffer with texture coordinate data.
 	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 	gl.bufferData(
 		gl.ARRAY_BUFFER,
-		// The data represents the vertices of a unit square in normalized texture coordinates.
-		new Float32Array([
-			// First triangle
-			0,
-			1, // Bottom-left
-			1,
-			1, // Bottom-right
-			0,
-			0, // Top-left
-
-			// Second triangle
-			0,
-			0, // Top-left
-			1,
-			1, // Bottom-right
-			1,
-			0, // Top-right
-		]),
+		new Float32Array([0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0]),
 		gl.STATIC_DRAW,
 	);
-	const tangentData = new Float32Array([
-		1,
-		0,
-		0, // Bottom-left
-		1,
-		0,
-		0, // Top-left
-		1,
-		0,
-		0, // Bottom-right
-		1,
-		0,
-		0, // Top-right
-		1,
-		0,
-		0, // Top-left (for triangle 2)
-		1,
-		0,
-		0, // Bottom-right (for triangle 2)
-	]);
-	const normalData = new Float32Array([
-		0,
-		0,
-		1, // All normals point toward camera
-		0,
-		0,
-		1,
-		0,
-		0,
-		1,
-		0,
-		0,
-		1,
-		0,
-		0,
-		1,
-		0,
-		0,
-		1,
-	]);
 
+	const positionBufferData = new Float32Array([
+		0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0,
+	]);
 	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
 	gl.bufferData(gl.ARRAY_BUFFER, positionBufferData, gl.STATIC_DRAW);
 	gl.enableVertexAttribArray(positionLocation);
 	gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
 
-	// Set up normal attribute
+	const normalData = new Float32Array([
+		0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+	]);
 	gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
 	gl.bufferData(gl.ARRAY_BUFFER, normalData, gl.STATIC_DRAW);
 	gl.enableVertexAttribArray(normalLocation);
 	gl.vertexAttribPointer(normalLocation, 3, gl.FLOAT, false, 0, 0);
 
+	const tangentData = new Float32Array([
+		1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+	]);
 	// Set up tangent attribute
 	gl.bindBuffer(gl.ARRAY_BUFFER, tangentBuffer);
 	gl.bufferData(gl.ARRAY_BUFFER, tangentData, gl.STATIC_DRAW);
@@ -1082,31 +1034,20 @@ export function drawEngine(ctx: WebglContext) {
 	};
 }
 
-export interface EngineOptions<T> {
+export interface EngineOptions {
 	canvas: HTMLCanvasElement | OffscreenCanvas;
-	readonly root: T;
+
+	readonly root: Node;
 	// Defaults to false
 	autoStart?: boolean;
 	// If present the canvas will be attached to the specified element.
 	container?: HTMLElement | string;
+
+	// For JSON only, will be passed to update functions.
+	global?: string;
 }
 
-export async function engine<T extends Node>(p: EngineOptions<T>) {
-	const program = webgl2(p);
-	const { render, start, stop } = renderer();
-	const whiteTexture = program.createColorTexture(whiteColor);
-	const canvas = program.canvas as HTMLCanvasElement;
-
-	if (p.container) {
-		const container =
-			typeof p.container === 'string'
-				? document.querySelector(p.container)
-				: p.container;
-		if (!container)
-			throw new Error('Could not find container element: ' + p.container);
-		container.append(canvas);
-	}
-
+export async function engine(p: EngineOptions) {
 	/**
 	 * Renders an image at the specified location.
 	 * Takes an image source (`src`) as input.
@@ -1160,8 +1101,8 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 			const fn =
 				typeof update === 'function'
 					? update
-					: new Function('node', update);
-			render(() => fn(node));
+					: new Function('node', 'global', update);
+			render(() => fn(node, global));
 		}
 		if (node.box) boxComponent(node.box);
 		if (node.fill) fill(node.fill);
@@ -1177,6 +1118,22 @@ export async function engine<T extends Node>(p: EngineOptions<T>) {
 		}
 		if (node.box) render(() => program.popMatrix());
 	}
+
+	const program = webgl2(p);
+	const { render, start, stop } = renderer();
+	const whiteTexture = program.createColorTexture(whiteColor);
+	const canvas = program.canvas as HTMLCanvasElement;
+	const global = p.global && new Function(p.global)();
+
+	/*if (p.container) {
+		const container =
+			typeof p.container === 'string'
+				? document.querySelector(p.container)
+				: p.container;
+		if (!container)
+			throw new Error('Could not find container element: ' + p.container);
+		container.append(canvas);
+	}*/
 
 	await load(p.root);
 
