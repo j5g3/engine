@@ -428,6 +428,10 @@ export function webgl2({
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	}
 
+	function setRenderMode(mode: 'pbr' | 'draw') {
+		gl.uniform1i(uRenderMode, mode === 'draw' ? 0 : 1);
+	}
+
 	const { gl, glProgram } = Program({
 		frag: `#version 300 es
 precision mediump float;
@@ -445,6 +449,8 @@ uniform sampler2D u_aoTexture;
 uniform vec3 u_lightPosition;
 uniform vec3 u_cameraPosition;
 uniform vec4 u_color;
+
+uniform int u_renderMode; // 0 = unlit, 1 = PBR lit
 
 out vec4 outColor;
 
@@ -514,6 +520,12 @@ vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, v
 
 void main() {
     vec4 albedo = texture(u_texture, v_texcoord) * u_color;
+	
+	// UNLIT BRANCH
+    if (u_renderMode == 0) {
+        outColor = albedo;
+        return;
+    }
     
     // Use the proper normal map transformation
     vec3 normal = getNormalFromMap();
@@ -576,7 +588,7 @@ void main() {
 		'u_normalMatrix',
 	);
 	const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
-
+	const uRenderMode = gl.getUniformLocation(glProgram, 'u_renderMode');
 	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
 	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
 	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
@@ -677,6 +689,7 @@ void main() {
 		canvas: gl.canvas,
 		clear,
 		resizeViewport,
+		setRenderMode,
 		pushMatrix(m: Matrix) {
 			matrixStack.push(M);
 			if (m !== identity) {
@@ -813,7 +826,7 @@ export function drawEngine(ctx: WebglContext) {
 
 		LINE_BOX.x = nx0; // - unitXHalf;
 		LINE_BOX.y = ny0; //- unitYHalf;
-		LINE_BOX.w = d + unitX;
+		LINE_BOX.w = d;
 		LINE_BOX.rotation = a;
 
 		composeBox(LINE_BOX, LINE_M);
