@@ -327,13 +327,16 @@ export function Texture(gl: WebGL2RenderingContext, o: TextureOptions) {
  * Creates a WebGL texture with a single pixel of the given color, used for filling shapes with color.
  */
 function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
+	const c = color.map(c => c * 255);
 	return Texture(gl, {
 		src: new ImageData(
-			new Uint8ClampedArray(color.map(c => c * 255)),
-			1,
-			1,
+			//new Uint8ClampedArray(color.map(c => c * 255)),
+			new Uint8ClampedArray([...c, ...c, ...c, ...c]),
+			2,
+			2,
 		),
 		minFilter: gl.NEAREST,
+		magFilter: gl.NEAREST,
 	});
 }
 
@@ -414,7 +417,7 @@ export function webgl2({
 	}
 
 	function resetPosition() {
-		setPosition({ data: positionBufferData });
+		setPosition({ data: positionBufferData.buffer });
 	}
 
 	function resizeViewport(width: number, height: number) {
@@ -810,7 +813,7 @@ export function drawEngine(ctx: WebglContext) {
 
 		LINE_BOX.x = nx0; // - unitXHalf;
 		LINE_BOX.y = ny0; //- unitYHalf;
-		LINE_BOX.w = d;
+		LINE_BOX.w = d + unitX;
 		LINE_BOX.rotation = a;
 
 		composeBox(LINE_BOX, LINE_M);
@@ -986,13 +989,6 @@ export function drawEngine(ctx: WebglContext) {
 
 	function resetWindow() {
 		window(0, 0, ctx.canvas.width, ctx.canvas.height);
-		/*viewScaleX = viewScaleY = PIXEL_M[0] = PIXEL_M[5] = unitX = unitY = LINE_BOX.h = 1;
-		unitXHalf = unitYHalf = LINE_BOX.cx = LINE_BOX.cy = 0.5;
-		viewMinX = viewMinY = 0;
-		
-		ctx.setProjectionMatrix(
-			orthographic(0, ctx.canvas.width, ctx.canvas.height, 0, -1, 1),
-		);*/
 	}
 
 	const PIXEL_M = Matrix();
@@ -1004,8 +1000,6 @@ export function drawEngine(ctx: WebglContext) {
 	let windowM = Matrix();
 	let unitX = 1,
 		unitY = 1,
-		//unitXHalf = 0.5,
-		//unitYHalf = 0.5,
 		prevUnitX = 1,
 		prevUnitY = 1;
 	let viewMinX = 0,
