@@ -27,6 +27,7 @@ export type ArrayBufferOptions = {
 	normalized?: boolean;
 	stride?: number;
 	offset?: number;
+	usage?: GLenum;
 };
 
 export type Mutable = { dirty?: boolean };
@@ -221,7 +222,17 @@ export function Program({
 		throw new Error('Could not create WebGL Program');
 	}
 
-	return { gl, glProgram };
+	function attribute(name: string, data: number[], size = 3) {
+		return new Attribute(
+			gl as WebGL2RenderingContext,
+			glProgram as WebGLProgram,
+			name,
+			data,
+			size,
+		);
+	}
+
+	return { gl, glProgram, attribute };
 }
 
 /**
@@ -399,6 +410,70 @@ function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
 	});
 }
 
+export class Attribute {
+	protected location: number;
+	protected buffer: WebGLBuffer;
+	protected initial: ArrayBufferOptions;
+
+	constructor(
+		protected gl: WebGL2RenderingContext,
+		glProgram: WebGLProgram,
+		public readonly name: string,
+		data: number[],
+		size = 3,
+	) {
+		this.location = gl.getAttribLocation(glProgram, name);
+		const buffer = gl.createBuffer();
+		if (!buffer) throw new Error('Could not create buffer');
+		this.buffer = buffer;
+		this.initial = { data: new Float32Array(data), size };
+		this.set(this.initial);
+		this.enable();
+	}
+
+	enable() {
+		this.gl.enableVertexAttribArray(this.location);
+	}
+
+	disable() {
+		this.gl.disableVertexAttribArray(this.location);
+	}
+
+	reset() {
+		this.set(this.initial);
+	}
+
+	set({
+		data,
+		size,
+		normalized,
+		type,
+		stride,
+		offset,
+		usage,
+	}: ArrayBufferOptions) {
+		const gl = this.gl;
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+		gl.bufferData(gl.ARRAY_BUFFER, data, usage ?? gl.STATIC_DRAW);
+		gl.vertexAttribPointer(
+			this.location,
+			size ?? 3,
+			type ?? gl.FLOAT,
+			normalized ?? false,
+			stride ?? 0,
+			offset ?? 0,
+		);
+	}
+}
+
+export class Uniform {
+	constructor(
+		gl: WebGL2RenderingContext,
+		glProgram: WebGLProgram,
+		name: string,
+	) {}
+}
+
 /**
  * Creates a WebGL 2.0 context with default shaders.
  *
@@ -437,32 +512,6 @@ export function webgl2({
 		gl.uniformMatrix4fv(normalMatrixLocation, false, m);
 	}
 
-	function setArrayBuffer(
-		buffer: WebGLBuffer,
-		location: number,
-		{ data, size, normalized, type, stride, offset }: ArrayBufferOptions,
-	) {
-		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-		gl.vertexAttribPointer(
-			location,
-			size ?? 2,
-			type ?? gl.FLOAT,
-			normalized ?? false,
-			stride ?? 0,
-			offset ?? 0,
-		);
-		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-	}
-
-	function setPosition(options: ArrayBufferOptions) {
-		options.size ??= 3;
-		setArrayBuffer(positionBuffer, positionLocation, options);
-	}
-	function setNormal(options: ArrayBufferOptions) {
-		options.size ??= 3;
-		setArrayBuffer(normalBuffer, normalLocation, options);
-	}
-
 	function setIndices(data: ArrayBuffer | ArrayBufferView) {
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
 		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
@@ -473,10 +522,6 @@ export function webgl2({
 			if (textureLocation) bindTexture(texture, textureLocation, 0);
 			u_texture = texture;
 		}
-	}
-
-	function resetPosition() {
-		setPosition({ data: positionBufferData.buffer });
 	}
 
 	function resizeViewport(width: number, height: number) {
@@ -491,7 +536,7 @@ export function webgl2({
 		gl.uniform1i(uRenderMode, mode === 'draw' ? 0 : 1);
 	}
 
-	const { gl, glProgram } = Program({
+	const { gl, glProgram, attribute } = Program({
 		frag: `#version 300 es
 precision mediump float;
 
@@ -603,10 +648,6 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_texcoord;
 in vec3 a_tangent;
-/*in vec4 a_model0;
-in vec4 a_model1;
-in vec4 a_model2;
-in vec4 a_model3;*/
 
 uniform mat4 u_model;
 uniform mat4 u_view;
@@ -648,15 +689,7 @@ void main() {
 	);
 	const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
 	const uRenderMode = gl.getUniformLocation(glProgram, 'u_renderMode');
-	const positionLocation = gl.getAttribLocation(glProgram, 'a_position');
-	const texCoordLocation = gl.getAttribLocation(glProgram, 'a_texcoord');
-	const normalLocation = gl.getAttribLocation(glProgram, 'a_normal');
-	const tangentLocation = gl.getAttribLocation(glProgram, 'a_tangent');
 	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
-	const tangentBuffer = createBuffer();
-	const positionBuffer = createBuffer();
-	const texCoordBuffer = createBuffer();
-	const normalBuffer = createBuffer();
 	const indicesBuffer = createBuffer();
 	const orthographicM = orthographic(
 		0,
@@ -674,48 +707,12 @@ void main() {
 	const u_roughnessTexture = ColorTexture(gl, blackColor);
 	const u_aoTexture = ColorTexture(gl, whiteColor);
 
-	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-	gl.bufferData(
-		gl.ARRAY_BUFFER,
-		new Float32Array([0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0]),
-		gl.STATIC_DRAW,
-	);
-
-	const positionBufferData = new Float32Array([
-		0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0,
-	]);
-	gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-	gl.bufferData(gl.ARRAY_BUFFER, positionBufferData, gl.STATIC_DRAW);
-	gl.enableVertexAttribArray(positionLocation);
-	gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
-
-	const normalData = new Float32Array([
-		0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
-	]);
-	gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
-	gl.bufferData(gl.ARRAY_BUFFER, normalData, gl.STATIC_DRAW);
-	gl.enableVertexAttribArray(normalLocation);
-	gl.vertexAttribPointer(normalLocation, 3, gl.FLOAT, false, 0, 0);
-
-	const tangentData = new Float32Array([
-		1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
-	]);
-	// Set up tangent attribute
-	gl.bindBuffer(gl.ARRAY_BUFFER, tangentBuffer);
-	gl.bufferData(gl.ARRAY_BUFFER, tangentData, gl.STATIC_DRAW);
-	gl.enableVertexAttribArray(tangentLocation);
-	gl.vertexAttribPointer(tangentLocation, 3, gl.FLOAT, false, 0, 0);
-
 	// Set matrices
+	gl.uniform4fv(colorLocation, u_color as unknown as number[]);
 	gl.uniformMatrix4fv(modelLocation, false, identity);
 	gl.uniformMatrix4fv(viewLocation, false, identity);
 	gl.uniformMatrix4fv(projectionLocation, false, orthographicM);
 	gl.uniformMatrix4fv(normalMatrixLocation, false, identity);
-
-	gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-	gl.enableVertexAttribArray(texCoordLocation);
-	gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
-	gl.uniform4fv(colorLocation, u_color as unknown as number[]);
 
 	const matrixStack: Matrix[] = [];
 	const normalTextureLoc = gl.getUniformLocation(
@@ -742,9 +739,25 @@ void main() {
 	gl.activeTexture(gl.TEXTURE0);
 
 	setProjectionMatrix(orthographicM);
-	resetPosition();
 
 	return {
+		position: attribute(
+			'a_position',
+			[0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+		),
+		normal: attribute(
+			'a_normal',
+			[0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+		),
+		tangent: attribute(
+			'a_tangent',
+			[1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+		),
+		texcoord: attribute(
+			'a_texcoord',
+			[0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0],
+			2,
+		),
 		canvas: gl.canvas,
 		clear,
 		resizeViewport,
@@ -772,13 +785,9 @@ void main() {
 					(u_color = color) as unknown as number[],
 				);
 		},
-
 		setIndices,
-		setPosition,
-		setNormal,
 		setProjectionMatrix,
 		setNormalMatrix,
-		resetPosition,
 		resetProjectionMatrix() {
 			setProjectionMatrix(orthographicM);
 		},
@@ -903,7 +912,7 @@ export function drawEngine(ctx: WebglContext) {
 		if (n < 2) return;
 
 		// Each segment is a quad = 2 triangles = 6 vertices
-		const verts = new Float32Array((n - 1) * 3 * 3);
+		const verts = new Float32Array((n - 0) * 3 * 3);
 		let o = 0;
 
 		for (let i = 2; i < n; i += 2) {
@@ -955,9 +964,19 @@ export function drawEngine(ctx: WebglContext) {
 			verts[o++] = 0;
 		}
 
-		ctx.setPosition({ data: verts.buffer, size: 3 });
+		ctx.position.set({
+			data: verts.buffer,
+			size: 3,
+			usage: WebGL2RenderingContext.STREAM_DRAW,
+		});
+		ctx.normal.disable();
+		ctx.texcoord.disable();
+		ctx.tangent.disable();
 		ctx.draw(verts.length / 3);
-		ctx.resetPosition();
+		ctx.normal.enable();
+		ctx.texcoord.enable();
+		ctx.tangent.enable();
+		ctx.position.reset();
 	}
 
 	function rect(x: number, y: number, w: number, h: number) {

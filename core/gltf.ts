@@ -1,4 +1,3 @@
-///<amd-module name="@j5g3/core/gltf.js"/>
 import type { ArrayBufferOptions, Matrix, WebglContext } from './index.js';
 
 export interface Gltf {
@@ -285,11 +284,11 @@ export async function gltf(ctx: WebglContext, data: Gltf) {
 			const { POSITION, NORMAL } = p.attributes;
 			if (POSITION !== undefined) {
 				const accessor = accessors?.[POSITION];
-				if (accessor) ctx.setPosition(accessor);
+				if (accessor) ctx.position.set(accessor);
 			}
 			if (NORMAL) {
 				const accessor = accessors?.[NORMAL];
-				if (accessor) ctx.setNormal(accessor);
+				if (accessor) ctx.normal.set(accessor);
 			}
 		}
 
@@ -326,6 +325,6 @@ export async function gltf(ctx: WebglContext, data: Gltf) {
 		ctx.pushMatrix(M);
 		scene?.nodes?.forEach(mapNode);
 		ctx.popMatrix();
-		ctx.resetPosition();
+		ctx.position.reset();
 	};
 }
