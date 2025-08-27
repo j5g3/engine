@@ -44,14 +44,28 @@ export type UpdateFn = string | ((node: Node) => void);
 export type WebglContext = ReturnType<typeof webgl2>;
 export type DrawEngine = ReturnType<typeof drawEngine>;
 
-export interface TextureOptions {
-	src?: TexImageSource;
+export interface TextureBaseOptions {
 	internalFormat?: GLenum;
 	minFilter?: GLenum;
 	magFilter?: GLenum;
 	wrapS?: GLenum;
 	wrapT?: GLenum;
+	border?: number;
+	format?: GLenum;
+	type?: GLenum;
 }
+
+export type ArrayBufferTextureOptions = TextureBaseOptions & {
+	src: ArrayBufferView;
+	width: number;
+	height: number;
+};
+
+export type TexImageTextureOptions = TextureBaseOptions & {
+	src?: TexImageSource;
+};
+
+export type TextureOptions = ArrayBufferTextureOptions | TexImageTextureOptions;
 
 export interface Node {
 	box?: BoxComponent;
@@ -290,6 +304,35 @@ export function updateTexture(
 	);
 }
 
+export function getWebGLType(
+	gl: WebGL2RenderingContext,
+	array: ArrayBufferView,
+): GLenum {
+	if (array instanceof Uint8Array) return gl.UNSIGNED_BYTE;
+	if (array instanceof Int8Array) return gl.BYTE;
+	if (array instanceof Uint16Array) return gl.UNSIGNED_SHORT;
+	if (array instanceof Int16Array) return gl.SHORT;
+	if (array instanceof Uint32Array) return gl.UNSIGNED_INT;
+	if (array instanceof Int32Array) return gl.INT;
+	if (array instanceof Float32Array) return gl.FLOAT;
+	// WebGL2 supports half float, but you can’t directly create a Float16Array in JS.
+	throw new Error('Unsupported typed array type for WebGL texture upload');
+}
+
+function defaultTextureFormat(
+	gl: WebGL2RenderingContext,
+	array: ArrayBufferView,
+) {
+	if (array instanceof Uint8Array) return gl.RGBA8;
+	if (array instanceof Float32Array) return gl.RGBA32F;
+	if (array instanceof Uint16Array) return gl.RGBA16UI;
+	if (array instanceof Int16Array) return gl.RGBA16I;
+	if (array instanceof Uint32Array) return gl.RGBA32UI;
+	if (array instanceof Int32Array) return gl.RGBA32I;
+
+	throw new Error('Unsupported typed array type');
+}
+
 /**
  * This function creates a WebGL texture, sets its parameters, and optionally uploads the provided image source.
  */
@@ -307,10 +350,26 @@ export function Texture(gl: WebGL2RenderingContext, o: TextureOptions) {
 		gl.TEXTURE_MIN_FILTER,
 		o.minFilter ?? gl.NEAREST,
 	);
-	if (o.magFilter)
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, o.magFilter);
+	gl.texParameteri(
+		gl.TEXTURE_2D,
+		gl.TEXTURE_MAG_FILTER,
+		o.magFilter ?? gl.NEAREST,
+	);
 
-	if (o.src)
+	if (ArrayBuffer.isView(o.src)) {
+		const format = o.internalFormat ?? defaultTextureFormat(gl, o.src);
+		gl.texImage2D(
+			gl.TEXTURE_2D,
+			0,
+			format,
+			(o as ArrayBufferTextureOptions).width,
+			(o as ArrayBufferTextureOptions).height,
+			o.border ?? 0,
+			o.format ?? gl.RGBA,
+			o.type ?? getWebGLType(gl, o.src),
+			o.src,
+		);
+	} else if (o.src)
 		gl.texImage2D(
 			gl.TEXTURE_2D,
 			0,
@@ -740,8 +799,8 @@ void main() {
 				p.src,
 			);
 		},
-		draw() {
-			gl.drawArrays(gl.TRIANGLES, 0, 6);
+		draw(count = 6) {
+			gl.drawArrays(gl.TRIANGLES, 0, count);
 		},
 		drawElements: gl.drawElements.bind(gl),
 	};
@@ -803,6 +862,10 @@ export function drawEngine(ctx: WebglContext) {
 		ctx.color = newColor;
 	}
 
+	function strokeWidth(n: number) {
+		_strokeWidth = n;
+	}
+
 	function pushDraw(m: Matrix) {
 		ctx.pushMatrix(m);
 		ctx.draw();
@@ -824,13 +887,77 @@ export function drawEngine(ctx: WebglContext) {
 		const d = Math.hypot(nx1 - nx0, ny1 - ny0);
 		const a = Math.atan2(ny1 - ny0, nx1 - nx0);
 
-		LINE_BOX.x = nx0; // - unitXHalf;
-		LINE_BOX.y = ny0; //- unitYHalf;
+		LINE_BOX.x = nx0;
+		LINE_BOX.y = ny0;
 		LINE_BOX.w = d;
+		LINE_BOX.h = _strokeWidth * unitY;
+		LINE_BOX.cy = (_strokeWidth * unitY) / 2;
 		LINE_BOX.rotation = a;
 
 		composeBox(LINE_BOX, LINE_M);
 		pushDraw(LINE_M);
+	}
+
+	function polyline(points: ArrayLike<number>) {
+		const n = points.length;
+		if (n < 2) return;
+
+		// Each segment is a quad = 2 triangles = 6 vertices
+		const verts = new Float32Array((n - 1) * 3 * 3);
+		let o = 0;
+
+		for (let i = 2; i < n; i += 2) {
+			// normalized device‐space coords:
+			const x0 = (points[i - 2] - viewMinX) * viewScaleX;
+			const y0 = Math.max(-1e3, (points[i - 1] - viewMinY) * viewScaleY);
+			const x1 = (points[i] - viewMinX) * viewScaleX;
+			const y1 = Math.min(1e3, (points[i + 1] - viewMinY) * viewScaleY);
+
+			if (Number.isNaN(x0 + y0 + x1 + y1)) {
+				continue;
+			}
+
+			// direction & normal
+			const dx = x1 - x0;
+			const dy = y1 - y0;
+			const L = Math.hypot(dx, dy) || 1;
+			const ux = dx / L,
+				uy = dy / L;
+			const nx = -uy,
+				ny = ux;
+
+			const halfW = (_strokeWidth * unitY) / 2;
+
+			// build two triangles: A+normal, B+normal, B-normal
+			verts[o++] = x0 + nx * halfW;
+			verts[o++] = y0 + ny * halfW;
+			verts[o++] = 0;
+
+			verts[o++] = x1 + nx * halfW;
+			verts[o++] = y1 + ny * halfW;
+			verts[o++] = 0;
+
+			verts[o++] = x1 - nx * halfW;
+			verts[o++] = y1 - ny * halfW;
+			verts[o++] = 0;
+
+			// then A+normal, B-normal, A-normal
+			verts[o++] = x0 + nx * halfW;
+			verts[o++] = y0 + ny * halfW;
+			verts[o++] = 0;
+
+			verts[o++] = x1 - nx * halfW;
+			verts[o++] = y1 - ny * halfW;
+			verts[o++] = 0;
+
+			verts[o++] = x0 - nx * halfW;
+			verts[o++] = y0 - ny * halfW;
+			verts[o++] = 0;
+		}
+
+		ctx.setPosition({ data: verts.buffer, size: 3 });
+		ctx.draw(verts.length / 3);
+		ctx.resetPosition();
 	}
 
 	function rect(x: number, y: number, w: number, h: number) {
@@ -1019,6 +1146,7 @@ export function drawEngine(ctx: WebglContext) {
 		viewMinY = 0;
 	let viewScaleX = 1,
 		viewScaleY = 1;
+	let _strokeWidth = 1;
 
 	PIXEL_M[0] = 1;
 	PIXEL_M[5] = 1;
@@ -1031,6 +1159,7 @@ export function drawEngine(ctx: WebglContext) {
 		putpixel,
 		draw2DTexture,
 		line,
+		polyline,
 		rect,
 		fillRect,
 		arc,
@@ -1038,6 +1167,7 @@ export function drawEngine(ctx: WebglContext) {
 		window,
 		resetWindow,
 		restoreWindow,
+		strokeWidth,
 	};
 }
 
