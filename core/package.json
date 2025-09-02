@@ -8,7 +8,7 @@
 	"browser": "index.min.js",
 	"type": "module",
 	"scripts": {
-		"build": "cxl-build",
+		"build": "tsc -b tsconfig.test.json",
 		"test": "npm run build && cd ../dist/core && cxl-tester --mjs"
 	}
 }

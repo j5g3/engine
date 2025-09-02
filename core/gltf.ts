@@ -258,11 +258,11 @@ export async function gltf(ctx: WebglContext, data: Gltf) {
 
 		if (material.pbrMetallicRoughness) {
 			const p = material.pbrMetallicRoughness;
-			if (p.baseColorFactor) ctx.color = p.baseColorFactor;
-			else ctx.color = [1, 1, 1, 1];
+			if (p.baseColorFactor) ctx.color.set(p.baseColorFactor);
+			else ctx.color.set([1, 1, 1, 1]);
 			if (p.baseColorTexture) {
 				const texture = textures?.[p.baseColorTexture.index];
-				if (texture) ctx.setTexture(texture);
+				if (texture) ctx.texture.set(texture);
 			}
 			/*if (baseColorTexture)
 				ctx.setTexture()
@@ -313,18 +313,18 @@ export async function gltf(ctx: WebglContext, data: Gltf) {
 	}
 
 	function renderNode(n: ResolvedNode) {
-		if (n.matrix) ctx.pushMatrix(n.matrix);
+		if (n.matrix) ctx.model.push(n.matrix);
 		if (n.mesh) renderMesh(n.mesh);
 
 		n.children?.forEach(mapNode);
 
-		if (n.matrix) ctx.popMatrix();
+		if (n.matrix) ctx.model.pop();
 	}
 
 	return () => {
-		ctx.pushMatrix(M);
+		ctx.model.push(M);
 		scene?.nodes?.forEach(mapNode);
-		ctx.popMatrix();
+		ctx.model.pop();
 		ctx.position.reset();
 	};
 }

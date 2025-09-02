@@ -18,7 +18,7 @@ export interface Box extends Rect {
 }
 
 export type Matrix = Float32Array;
-export type Color = readonly [number, number, number, number];
+export type Color = readonly [number, number, number, number] | Float32Array;
 
 export type ArrayBufferOptions = {
 	data: ArrayBuffer;
@@ -44,6 +44,7 @@ export type BoxComponent = Partial<Box> & Mutable;
 export type UpdateFn = string | ((node: Node) => void);
 export type WebglContext = ReturnType<typeof webgl2>;
 export type DrawEngine = ReturnType<typeof drawEngine>;
+export type UniformType = Float32Array | number[] | number | Texture | Color;
 
 export interface TextureBaseOptions {
 	internalFormat?: GLenum;
@@ -196,43 +197,78 @@ export function orthographic(
  * It also handles error scenarios during shader compilation and program linking.
  *
  */
-export function Program({
-	frag,
-	vtx,
-	canvas,
-}: {
-	frag: string;
-	vtx: string;
-	canvas: HTMLCanvasElement | OffscreenCanvas;
-}) {
-	const gl = canvas.getContext('webgl2');
-	if (!gl) throw new Error('Could not create webgl2 canvas context');
-	const glProgram = gl.createProgram();
-	if (!glProgram) throw new Error('Could not create WebGL Program');
+export class Program {
+	readonly gl: WebGL2RenderingContext;
+	readonly glProgram: WebGLProgram;
+	protected textureUnit = 0;
 
-	const vertexShader = Shader(gl, vtx, gl.VERTEX_SHADER);
-	const fragShader = Shader(gl, frag, gl.FRAGMENT_SHADER);
+	constructor(
+		frag: string,
+		vtx: string,
+		public readonly canvas: HTMLCanvasElement | OffscreenCanvas,
+	) {
+		const gl = canvas.getContext('webgl2');
+		if (!gl) throw new Error('Could not create webgl2 canvas context');
+		const glProgram = gl.createProgram();
+		if (!glProgram) throw new Error('Could not create WebGL Program');
 
-	gl.attachShader(glProgram, vertexShader);
-	gl.attachShader(glProgram, fragShader);
-	gl.linkProgram(glProgram);
+		this.gl = gl;
+		this.glProgram = glProgram;
 
-	if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
-		gl.deleteProgram(glProgram);
-		throw new Error('Could not create WebGL Program');
+		const vertexShader = Shader(gl, vtx, gl.VERTEX_SHADER);
+		const fragShader = Shader(gl, frag, gl.FRAGMENT_SHADER);
+
+		gl.attachShader(glProgram, vertexShader);
+		gl.attachShader(glProgram, fragShader);
+		gl.linkProgram(glProgram);
+
+		if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
+			gl.deleteProgram(glProgram);
+			throw new Error('Could not create WebGL Program');
+		}
 	}
 
-	function attribute(name: string, data: number[], size = 3) {
-		return new Attribute(
-			gl as WebGL2RenderingContext,
-			glProgram as WebGLProgram,
-			name,
-			data,
-			size,
-		);
+	use() {
+		this.gl.useProgram(this.glProgram);
 	}
 
-	return { gl, glProgram, attribute };
+	attribute(name: string, data: number[], size = 3) {
+		return new Attribute(this, name, data, size);
+	}
+
+	uniform<T extends UniformType>(name: string, data: T) {
+		return new Uniform<T>(this, name, data);
+	}
+
+	uniformMatrix(name: string, data: Float32Array) {
+		return new UniformMatrix(this, name, data);
+	}
+
+	uniformTexture(name: string, data: Texture) {
+		return new UniformTexture(this, name, data, this.textureUnit++);
+	}
+
+	location(name: string) {
+		const location = this.gl.getUniformLocation(this.glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		return location;
+	}
+
+	uniformInfo(name: string) {
+		const { gl, glProgram } = this;
+		const location = gl.getUniformLocation(glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		const index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
+		const type = gl.getActiveUniform(glProgram, index)?.type ?? -1;
+		const method = getUniformMethod(gl, type);
+
+		return {
+			location,
+			index,
+			type,
+			method,
+		};
+	}
 }
 
 /**
@@ -299,22 +335,6 @@ export function multiply(
 	return dst;
 }
 
-export function updateTexture(
-	gl: WebGL2RenderingContext,
-	texture: WebGLTexture,
-	{ internalFormat, src }: { internalFormat?: GLenum; src: TexImageSource },
-) {
-	gl.bindTexture(gl.TEXTURE_2D, texture);
-	gl.texImage2D(
-		gl.TEXTURE_2D,
-		0,
-		internalFormat ?? gl.RGBA,
-		internalFormat ?? gl.RGBA,
-		gl.UNSIGNED_BYTE,
-		src,
-	);
-}
-
 export function getWebGLType(
 	gl: WebGL2RenderingContext,
 	array: ArrayBufferView,
@@ -344,69 +364,88 @@ function defaultTextureFormat(
 	throw new Error('Unsupported typed array type');
 }
 
-/**
- * This function creates a WebGL texture, sets its parameters, and optionally uploads the provided image source.
- */
-export function Texture(gl: WebGL2RenderingContext, o: TextureOptions) {
-	o.wrapS ??= gl.CLAMP_TO_EDGE;
-	o.wrapT ??= o.wrapS;
+export class Texture {
+	readonly texture: WebGLTexture;
 
-	const texture = gl.createTexture();
-	if (!texture) throw new Error('Could not create texture');
-	gl.bindTexture(gl.TEXTURE_2D, texture);
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, o.wrapS);
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, o.wrapT);
-	gl.texParameteri(
-		gl.TEXTURE_2D,
-		gl.TEXTURE_MIN_FILTER,
-		o.minFilter ?? gl.NEAREST,
-	);
-	gl.texParameteri(
-		gl.TEXTURE_2D,
-		gl.TEXTURE_MAG_FILTER,
-		o.magFilter ?? gl.NEAREST,
-	);
+	protected options: TextureOptions = {};
 
-	if (ArrayBuffer.isView(o.src)) {
-		const format = o.internalFormat ?? defaultTextureFormat(gl, o.src);
-		gl.texImage2D(
-			gl.TEXTURE_2D,
-			0,
-			format,
-			(o as ArrayBufferTextureOptions).width,
-			(o as ArrayBufferTextureOptions).height,
-			o.border ?? 0,
-			o.format ?? gl.RGBA,
-			o.type ?? getWebGLType(gl, o.src),
-			o.src,
-		);
-	} else if (o.src)
-		gl.texImage2D(
-			gl.TEXTURE_2D,
-			0,
-			o.internalFormat ?? gl.RGBA,
-			o.internalFormat ?? gl.RGBA,
-			gl.UNSIGNED_BYTE,
-			o.src,
-		);
+	constructor(
+		protected readonly gl: WebGL2RenderingContext,
+		o: TextureOptions,
+	) {
+		this.texture = gl.createTexture();
+		this.update({
+			wrapS: gl.CLAMP_TO_EDGE,
+			wrapT: o.wrapT ?? gl.CLAMP_TO_EDGE,
+			minFilter: gl.NEAREST,
+			magFilter: gl.NEAREST,
+			...o,
+		});
+	}
 
-	return texture;
+	update(o2: TextureOptions) {
+		const o = this.options;
+		const gl = this.gl;
+
+		gl.bindTexture(gl.TEXTURE_2D, this.texture);
+
+		if (o2.wrapS !== undefined && o.wrapS !== o2.wrapS)
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, o2.wrapS);
+
+		if (o2.wrapT !== undefined && o.wrapT !== o2.wrapT)
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, o2.wrapT);
+
+		if (o2.minFilter !== undefined && o.minFilter !== o2.minFilter)
+			gl.texParameteri(
+				gl.TEXTURE_2D,
+				gl.TEXTURE_MIN_FILTER,
+				o2.minFilter,
+			);
+
+		if (o2.magFilter !== undefined && o.magFilter !== o2.magFilter)
+			gl.texParameteri(
+				gl.TEXTURE_2D,
+				gl.TEXTURE_MAG_FILTER,
+				o.magFilter ?? gl.NEAREST,
+			);
+
+		Object.assign(this.options, o2);
+
+		if (!o2.src) return;
+
+		if (ArrayBuffer.isView(o.src)) {
+			const format = o.internalFormat ?? defaultTextureFormat(gl, o.src);
+			gl.texImage2D(
+				gl.TEXTURE_2D,
+				0,
+				format,
+				(o as ArrayBufferTextureOptions).width,
+				(o as ArrayBufferTextureOptions).height,
+				o.border ?? 0,
+				o.format ?? gl.RGBA,
+				o.type ?? getWebGLType(gl, o.src),
+				o.src,
+			);
+		} else if (o.src)
+			gl.texImage2D(
+				gl.TEXTURE_2D,
+				0,
+				o.internalFormat ?? gl.RGBA,
+				o.internalFormat ?? gl.RGBA,
+				gl.UNSIGNED_BYTE,
+				o.src,
+			);
+	}
 }
 
 /**
  * Creates a WebGL texture with a single pixel of the given color, used for filling shapes with color.
  */
 function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
-	const c = color.map(c => c * 255);
-	return Texture(gl, {
-		src: new ImageData(
-			//new Uint8ClampedArray(color.map(c => c * 255)),
-			new Uint8ClampedArray([...c, ...c, ...c, ...c]),
-			2,
-			2,
-		),
-		minFilter: gl.NEAREST,
-		magFilter: gl.NEAREST,
+	return new Texture(gl, {
+		src: color instanceof Float32Array ? color : new Float32Array(color),
+		width: 1,
+		height: 1,
 	});
 }
 
@@ -416,27 +455,27 @@ export class Attribute {
 	protected initial: ArrayBufferOptions;
 
 	constructor(
-		protected gl: WebGL2RenderingContext,
-		glProgram: WebGLProgram,
+		protected program: Program,
 		public readonly name: string,
 		data: number[],
 		size = 3,
 	) {
-		this.location = gl.getAttribLocation(glProgram, name);
+		const gl = program.gl;
+		this.location = gl.getAttribLocation(program.glProgram, name);
 		const buffer = gl.createBuffer();
 		if (!buffer) throw new Error('Could not create buffer');
 		this.buffer = buffer;
-		this.initial = { data: new Float32Array(data), size };
+		this.initial = { data: new Float32Array(data).buffer, size };
 		this.set(this.initial);
 		this.enable();
 	}
 
 	enable() {
-		this.gl.enableVertexAttribArray(this.location);
+		this.program.gl.enableVertexAttribArray(this.location);
 	}
 
 	disable() {
-		this.gl.disableVertexAttribArray(this.location);
+		this.program.gl.disableVertexAttribArray(this.location);
 	}
 
 	reset() {
@@ -452,7 +491,7 @@ export class Attribute {
 		offset,
 		usage,
 	}: ArrayBufferOptions) {
-		const gl = this.gl;
+		const gl = this.program.gl;
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
 		gl.bufferData(gl.ARRAY_BUFFER, data, usage ?? gl.STATIC_DRAW);
 		gl.vertexAttribPointer(
@@ -466,12 +505,159 @@ export class Attribute {
 	}
 }
 
-export class Uniform {
+export class Uniform<T extends UniformType> {
+	readonly location: WebGLUniformLocation;
+	readonly type: GLenum;
+	readonly index: number;
+
+	protected initial: T;
+	protected method: ReturnType<typeof getUniformMethod>;
+	protected unit = 0;
+
 	constructor(
-		gl: WebGL2RenderingContext,
-		glProgram: WebGLProgram,
-		name: string,
-	) {}
+		protected program: Program,
+		public readonly name: string,
+		public readonly value: T,
+	) {
+		const { gl, glProgram } = program;
+		const location = gl.getUniformLocation(glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		this.location = location;
+		this.index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
+		this.type = gl.getActiveUniform(glProgram, this.index)?.type ?? -1;
+		this.method = getUniformMethod(gl, this.type);
+		this.initial = value;
+		this.initialize(value);
+	}
+
+	reset() {
+		this.set(this.initial);
+	}
+
+	set(value: T) {
+		const gl = this.program.gl;
+		(this.value as T) = value;
+		gl[this.method as 'uniform1i'](this.location, value as number);
+	}
+
+	protected initialize(value: T) {
+		this.set(value);
+	}
+}
+
+export class UniformMatrix extends Uniform<Float32Array> {
+	protected stack: Matrix[] = [];
+
+	push(m: Matrix) {
+		this.stack.push(this.value);
+		if (m !== identity)
+			this.set(this.value === identity ? m : multiply(this.value, m));
+	}
+
+	pop() {
+		const M2 = this.stack.pop();
+		if (!M2) throw new Error('Matrix stack empty');
+		this.set(M2);
+	}
+
+	set(value: Float32Array) {
+		this.program.gl[this.method as 'uniformMatrix4x3fv'](
+			this.location,
+			false,
+			value,
+		);
+	}
+}
+
+export class UniformTexture {
+	protected location: WebGLUniformLocation;
+
+	constructor(
+		protected program: Program,
+		public readonly name: string,
+		public readonly value: Texture,
+		protected unit: number,
+	) {
+		this.location = program.location(name);
+		this.program.gl.uniform1i(this.location, this.unit);
+		this.set(value);
+	}
+
+	set(value: Texture) {
+		const gl = this.program.gl;
+		gl.activeTexture(gl.TEXTURE0 + this.unit);
+		gl.bindTexture(gl.TEXTURE_2D, value.texture);
+	}
+}
+
+function getUniformMethod(gl: WebGL2RenderingContext, type: number) {
+	switch (type) {
+		case gl.FLOAT:
+			return 'uniform1f';
+		case gl.FLOAT_VEC2:
+			return 'uniform2fv';
+		case gl.FLOAT_VEC3:
+			return 'uniform3fv';
+		case gl.FLOAT_VEC4:
+			return 'uniform4fv';
+
+		case gl.INT_VEC2:
+		case gl.BOOL_VEC2:
+			return 'uniform2iv';
+		case gl.BOOL_VEC3:
+		case gl.INT_VEC3:
+			return 'uniform3iv';
+		case gl.BOOL_VEC4:
+		case gl.INT_VEC4:
+			return 'uniform4iv';
+
+		case gl.UNSIGNED_INT:
+			return 'uniform1ui';
+		case gl.UNSIGNED_INT_VEC2:
+			return 'uniform2uiv';
+		case gl.UNSIGNED_INT_VEC3:
+			return 'uniform3uiv';
+		case gl.UNSIGNED_INT_VEC4:
+			return 'uniform4uiv';
+
+		case gl.FLOAT_MAT2:
+			return 'uniformMatrix2fv';
+		case gl.FLOAT_MAT3:
+			return 'uniformMatrix3fv';
+		case gl.FLOAT_MAT4:
+			return 'uniformMatrix4fv';
+		case gl.FLOAT_MAT2x3:
+			return 'uniformMatrix2x3fv';
+		case gl.FLOAT_MAT2x4:
+			return 'uniformMatrix2x4fv';
+		case gl.FLOAT_MAT3x2:
+			return 'uniformMatrix3x2fv';
+		case gl.FLOAT_MAT3x4:
+			return 'uniformMatrix3x4fv';
+		case gl.FLOAT_MAT4x2:
+			return 'uniformMatrix4x2fv';
+		case gl.FLOAT_MAT4x3:
+			return 'uniformMatrix4x3fv';
+
+		case gl.INT:
+		case gl.BOOL:
+		case gl.SAMPLER_2D:
+		case gl.SAMPLER_CUBE:
+		case gl.SAMPLER_3D:
+		case gl.SAMPLER_2D_SHADOW:
+		case gl.SAMPLER_2D_ARRAY:
+		case gl.SAMPLER_2D_ARRAY_SHADOW:
+		case gl.INT_SAMPLER_2D:
+		case gl.INT_SAMPLER_3D:
+		case gl.INT_SAMPLER_CUBE:
+		case gl.INT_SAMPLER_2D_ARRAY:
+		case gl.UNSIGNED_INT_SAMPLER_2D:
+		case gl.UNSIGNED_INT_SAMPLER_3D:
+		case gl.UNSIGNED_INT_SAMPLER_CUBE:
+		case gl.UNSIGNED_INT_SAMPLER_2D_ARRAY:
+			return 'uniform1i';
+	}
+	throw new Error(`Unknown uniform type: ${type}`);
 }
 
 /**
@@ -494,34 +680,9 @@ export function webgl2({
 		return buffer;
 	}
 
-	function bindTexture(
-		texture: WebGLTexture,
-		location: WebGLUniformLocation,
-		unit: number,
-	) {
-		gl.activeTexture(gl.TEXTURE0 + unit);
-		gl.bindTexture(gl.TEXTURE_2D, texture);
-		gl.uniform1i(location, unit);
-	}
-
-	function setProjectionMatrix(m: Matrix) {
-		gl.uniformMatrix4fv(projectionLocation, false, m);
-	}
-
-	function setNormalMatrix(m: Matrix) {
-		gl.uniformMatrix4fv(normalMatrixLocation, false, m);
-	}
-
 	function setIndices(data: ArrayBuffer | ArrayBufferView) {
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
 		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
-	}
-
-	function setTexture(texture: WebGLTexture) {
-		if (u_texture !== texture) {
-			if (textureLocation) bindTexture(texture, textureLocation, 0);
-			u_texture = texture;
-		}
 	}
 
 	function resizeViewport(width: number, height: number) {
@@ -532,12 +693,8 @@ export function webgl2({
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	}
 
-	function setRenderMode(mode: 'pbr' | 'draw') {
-		gl.uniform1i(uRenderMode, mode === 'draw' ? 0 : 1);
-	}
-
-	const { gl, glProgram, attribute } = Program({
-		frag: `#version 300 es
+	const program = new Program(
+		`#version 300 es
 precision mediump float;
 
 in vec3 v_normal;
@@ -641,7 +798,7 @@ void main() {
     outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
 }
 `,
-		vtx: `#version 300 es
+		`#version 300 es
 precision highp float;
 
 in vec3 a_position;
@@ -670,144 +827,82 @@ void main() {
 }
 		`,
 		canvas,
-	});
+	);
+	const { gl } = program;
 
-	gl.useProgram(glProgram);
+	program.use();
 
 	gl.clearColor(0, 0, 0, 0);
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	gl.enable(gl.BLEND);
 	gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
 	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-	const modelLocation = gl.getUniformLocation(glProgram, 'u_model');
-	const viewLocation = gl.getUniformLocation(glProgram, 'u_view');
-	const projectionLocation = gl.getUniformLocation(glProgram, 'u_projection');
-	const normalMatrixLocation = gl.getUniformLocation(
-		glProgram,
-		'u_normalMatrix',
-	);
-	const textureLocation = gl.getUniformLocation(glProgram, 'u_texture');
-	const uRenderMode = gl.getUniformLocation(glProgram, 'u_renderMode');
-	const colorLocation = gl.getUniformLocation(glProgram, 'u_color');
-	const indicesBuffer = createBuffer();
-	const orthographicM = orthographic(
-		0,
-		gl.canvas.width,
-		gl.canvas.height,
-		0,
-		-1,
-		1,
-	);
-
-	let u_color = whiteColor;
-	let u_texture: WebGLTexture;
-	const u_normalTexture = ColorTexture(gl, blackColor);
-	const u_metallicTexture = ColorTexture(gl, blackColor);
-	const u_roughnessTexture = ColorTexture(gl, blackColor);
-	const u_aoTexture = ColorTexture(gl, whiteColor);
-
-	// Set matrices
-	gl.uniform4fv(colorLocation, u_color as unknown as number[]);
-	gl.uniformMatrix4fv(modelLocation, false, identity);
-	gl.uniformMatrix4fv(viewLocation, false, identity);
-	gl.uniformMatrix4fv(projectionLocation, false, orthographicM);
-	gl.uniformMatrix4fv(normalMatrixLocation, false, identity);
-
-	const matrixStack: Matrix[] = [];
-	const normalTextureLoc = gl.getUniformLocation(
-		glProgram,
-		'u_normalTexture',
-	);
-	const metallicLoc = gl.getUniformLocation(glProgram, 'u_metallicTexture');
-	const roughnessLoc = gl.getUniformLocation(glProgram, 'u_roughnessTexture');
-	const aoLoc = gl.getUniformLocation(glProgram, 'u_aoTexture');
-	const lightPosLoc = gl.getUniformLocation(glProgram, 'u_lightPosition');
-	const cameraPosLoc = gl.getUniformLocation(glProgram, 'u_cameraPosition');
-
-	let M = identity;
-
-	gl.uniform3fv(lightPosLoc, [0.5, 0.5, 1.0]);
-	gl.uniform3fv(cameraPosLoc, [0.0, 0.0, 1.0]);
-
-	if (normalTextureLoc) bindTexture(u_normalTexture, normalTextureLoc, 1);
-	if (metallicLoc) bindTexture(u_metallicTexture, metallicLoc, 2);
-	if (roughnessLoc) bindTexture(u_roughnessTexture, roughnessLoc, 3);
-	if (aoLoc) bindTexture(u_aoTexture, aoLoc, 4);
-
 	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-	gl.activeTexture(gl.TEXTURE0);
 
-	setProjectionMatrix(orthographicM);
+	const indicesBuffer = createBuffer();
 
 	return {
-		position: attribute(
+		position: program.attribute(
 			'a_position',
 			[0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],
 		),
-		normal: attribute(
+		normal: program.attribute(
 			'a_normal',
 			[0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
 		),
-		tangent: attribute(
+		tangent: program.attribute(
 			'a_tangent',
 			[1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
 		),
-		texcoord: attribute(
+		texcoord: program.attribute(
 			'a_texcoord',
 			[0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0],
 			2,
 		),
+
+		lightPosition: program.uniform('u_lightPosition', [0.5, 0.5, 1.0]),
+		cameraPosition: program.uniform('u_cameraPosition', [0.0, 0.0, 1.0]),
+
+		model: program.uniformMatrix('u_model', identity),
+		view: program.uniformMatrix('u_view', identity),
+		projection: program.uniformMatrix(
+			'u_projection',
+			orthographic(0, gl.canvas.width, gl.canvas.height, 0, -1, 1),
+		),
+		normalMatrix: program.uniformMatrix('u_normalMatrix', identity),
+
+		color: program.uniform('u_color', whiteColor),
+		renderMode: program.uniform('u_renderMode', 0),
+
+		texture: program.uniformTexture(
+			'u_texture',
+			ColorTexture(gl, whiteColor),
+		),
+		normalTexture: program.uniformTexture(
+			'u_normalTexture',
+			ColorTexture(gl, blackColor),
+		),
+		metallicTexture: program.uniformTexture(
+			'u_metallicTexture',
+			ColorTexture(gl, blackColor),
+		),
+		roughnessTexture: program.uniformTexture(
+			'u_roughnessTexture',
+			ColorTexture(gl, blackColor),
+		),
+		aoTexture: program.uniformTexture(
+			'u_aoTexture',
+			ColorTexture(gl, whiteColor),
+		),
+
 		canvas: gl.canvas,
 		clear,
 		resizeViewport,
-		setRenderMode,
-		pushMatrix(m: Matrix) {
-			matrixStack.push(M);
-			if (m !== identity) {
-				M = M === identity ? m : multiply(M, m);
-				gl.uniformMatrix4fv(modelLocation, false, M);
-			}
-		},
-		popMatrix() {
-			const M2 = matrixStack.pop();
-			if (!M2) throw new Error('Matrix stack empty');
-			M = M2;
-			gl.uniformMatrix4fv(modelLocation, false, M2);
-		},
-		get color() {
-			return u_color;
-		},
-		set color(color: Color) {
-			if (color !== u_color)
-				gl.uniform4fv(
-					colorLocation,
-					(u_color = color) as unknown as number[],
-				);
-		},
 		setIndices,
-		setProjectionMatrix,
-		setNormalMatrix,
-		resetProjectionMatrix() {
-			setProjectionMatrix(orthographicM);
+		createTexture(o: TextureOptions) {
+			return new Texture(gl, o);
 		},
-		setTexture,
-		createTexture: Texture.bind(0, gl),
 		createColorTexture: ColorTexture.bind(0, gl),
-		updateTexture(
-			texture: WebGLTexture,
-			p: { internalFormat?: GLenum; src: TexImageSource },
-		) {
-			setTexture(texture);
-			gl.texImage2D(
-				gl.TEXTURE_2D,
-				0,
-				p.internalFormat ?? gl.RGBA,
-				p.internalFormat ?? gl.RGBA,
-				gl.UNSIGNED_BYTE,
-				p.src,
-			);
-		},
 		draw(count = 6) {
 			gl.drawArrays(gl.TRIANGLES, 0, count);
 		},
@@ -867,8 +962,8 @@ export function Box(box?: Partial<Box>) {
 
 export function drawEngine(ctx: WebglContext) {
 	function color(newColor: Color) {
-		ctx.setTexture(whiteTexture);
-		ctx.color = newColor;
+		ctx.texture.set(whiteTexture);
+		ctx.color.set(newColor);
 	}
 
 	function strokeWidth(n: number) {
@@ -876,9 +971,9 @@ export function drawEngine(ctx: WebglContext) {
 	}
 
 	function pushDraw(m: Matrix) {
-		ctx.pushMatrix(m);
+		ctx.model.push(m);
 		ctx.draw();
-		ctx.popMatrix();
+		ctx.model.pop();
 	}
 
 	function putpixel(x: number, y: number) {
@@ -1095,7 +1190,7 @@ export function drawEngine(ctx: WebglContext) {
 		drawScreen(screenData);
 	}*/
 
-	function draw2DTexture(
+	/*function draw2DTexture(
 		texture: WebGLTexture,
 		x: number,
 		y: number,
@@ -1103,8 +1198,8 @@ export function drawEngine(ctx: WebglContext) {
 		h: number,
 	) {
 		scaleM(RECT_M, x, y, w, h);
-		ctx.setTexture(texture);
-		ctx.color = whiteColor;
+		ctx.texture.set(texture);
+		ctx.color.set(whiteColor);
 		pushDraw(RECT_M);
 	}
 
@@ -1143,7 +1238,7 @@ export function drawEngine(ctx: WebglContext) {
 		LINE_BOX.h = unitY;
 		LINE_BOX.cx = /*unitXHalf =*/ unitX / 2;
 		LINE_BOX.cy = /*unitYHalf =*/ unitY / 2;
-		ctx.setProjectionMatrix(windowM);
+		ctx.projection.set(windowM);
 	}
 
 	function resetWindow() {
@@ -1176,7 +1271,7 @@ export function drawEngine(ctx: WebglContext) {
 	return {
 		color,
 		putpixel,
-		draw2DTexture,
+		//draw2DTexture,
 		line,
 		polyline,
 		rect,
@@ -1222,17 +1317,17 @@ export async function engine(p: EngineOptions) {
 		const texture = program.createTexture(p);
 
 		render(() => {
-			if (p.dirty) program.updateTexture(texture, p);
-			program.setTexture(texture);
-			program.color = whiteColor;
+			if (p.dirty) texture.update(p);
+			program.texture.set(texture);
+			program.color.set(whiteColor);
 			program.draw();
 		});
 	}
 
 	function fill(p: FillComponent) {
 		render(() => {
-			program.color = p.color || whiteColor;
-			program.setTexture(whiteTexture);
+			program.color.set(p.color || whiteColor);
+			program.texture.set(whiteTexture);
 			program.draw();
 		});
 	}
@@ -1241,7 +1336,7 @@ export async function engine(p: EngineOptions) {
 		let M = composeBox(Box(box));
 		render(() => {
 			if (box.dirty) M = composeBox(Box(box));
-			program.pushMatrix(M);
+			program.model.push(M);
 		});
 	}
 
@@ -1272,7 +1367,7 @@ export async function engine(p: EngineOptions) {
 				: Object.values(node.children);
 			for (const child of nodes) await load(child);
 		}
-		if (node.box) render(() => program.popMatrix());
+		if (node.box) render(() => program.model.pop());
 	}
 
 	const program = webgl2(p);
