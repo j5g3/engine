@@ -30,21 +30,19 @@ export type ArrayBufferOptions = {
 	usage?: GLenum;
 };
 
-export type Mutable = { dirty?: boolean };
 export type TextureComponent = TextureOptions & {
 	src: TexImageSource;
-} & Mutable;
+};
 export type ImageComponent = Omit<TextureOptions, 'src'> & {
 	readonly src: string | TexImageSource;
 };
-export type FillComponent = {
-	color: Color;
-} & Mutable;
-export type BoxComponent = Partial<Box> & Mutable;
+export type BoxComponent = Partial<Box>;
+
 export type UpdateFn = string | ((node: Node) => void);
 export type WebglContext = ReturnType<typeof webgl2>;
 export type DrawEngine = ReturnType<typeof drawEngine>;
 export type UniformType = Float32Array | number[] | number | Texture | Color;
+export type Engine = ReturnType<typeof engine>;
 
 export interface TextureBaseOptions {
 	internalFormat?: GLenum;
@@ -73,9 +71,10 @@ export interface Node {
 	box?: BoxComponent;
 	image?: ImageComponent;
 	texture?: TextureComponent;
-	children?: Record<string | number, Node>;
+	children?: Node[];
 	update?: UpdateFn;
-	fill?: FillComponent;
+	fill?: Color;
+	draw?: (drawEngine: DrawEngine) => void;
 	//model?: ModelComponent;
 }
 
@@ -335,10 +334,8 @@ export function multiply(
 	return dst;
 }
 
-export function getWebGLType(
-	gl: WebGL2RenderingContext,
-	array: ArrayBufferView,
-): GLenum {
+export function getWebGLType(array: ArrayBufferView): GLenum {
+	const gl = WebGL2RenderingContext;
 	if (array instanceof Uint8Array) return gl.UNSIGNED_BYTE;
 	if (array instanceof Int8Array) return gl.BYTE;
 	if (array instanceof Uint16Array) return gl.UNSIGNED_SHORT;
@@ -350,10 +347,8 @@ export function getWebGLType(
 	throw new Error('Unsupported typed array type for WebGL texture upload');
 }
 
-function defaultTextureFormat(
-	gl: WebGL2RenderingContext,
-	array: ArrayBufferView,
-) {
+function defaultTextureFormat(array: ArrayBufferView) {
+	const gl = WebGL2RenderingContext;
 	if (array instanceof Uint8Array) return gl.RGBA8;
 	if (array instanceof Float32Array) return gl.RGBA32F;
 	if (array instanceof Uint16Array) return gl.RGBA16UI;
@@ -383,38 +378,40 @@ export class Texture {
 		});
 	}
 
-	update(o2: TextureOptions) {
+	update(o2?: TextureOptions) {
 		const o = this.options;
 		const gl = this.gl;
 
 		gl.bindTexture(gl.TEXTURE_2D, this.texture);
 
-		if (o2.wrapS !== undefined && o.wrapS !== o2.wrapS)
-			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, o2.wrapS);
+		if (o2) {
+			if (o2.wrapS !== undefined && o.wrapS !== o2.wrapS)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, o2.wrapS);
 
-		if (o2.wrapT !== undefined && o.wrapT !== o2.wrapT)
-			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, o2.wrapT);
+			if (o2.wrapT !== undefined && o.wrapT !== o2.wrapT)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, o2.wrapT);
 
-		if (o2.minFilter !== undefined && o.minFilter !== o2.minFilter)
-			gl.texParameteri(
-				gl.TEXTURE_2D,
-				gl.TEXTURE_MIN_FILTER,
-				o2.minFilter,
-			);
+			if (o2.minFilter !== undefined && o.minFilter !== o2.minFilter)
+				gl.texParameteri(
+					gl.TEXTURE_2D,
+					gl.TEXTURE_MIN_FILTER,
+					o2.minFilter,
+				);
 
-		if (o2.magFilter !== undefined && o.magFilter !== o2.magFilter)
-			gl.texParameteri(
-				gl.TEXTURE_2D,
-				gl.TEXTURE_MAG_FILTER,
-				o.magFilter ?? gl.NEAREST,
-			);
+			if (o2.magFilter !== undefined && o.magFilter !== o2.magFilter)
+				gl.texParameteri(
+					gl.TEXTURE_2D,
+					gl.TEXTURE_MAG_FILTER,
+					o.magFilter ?? gl.NEAREST,
+				);
 
-		Object.assign(this.options, o2);
+			Object.assign(this.options, o2);
+		}
 
-		if (!o2.src) return;
+		if (!o.src) return;
 
 		if (ArrayBuffer.isView(o.src)) {
-			const format = o.internalFormat ?? defaultTextureFormat(gl, o.src);
+			const format = o.internalFormat ?? defaultTextureFormat(o.src);
 			gl.texImage2D(
 				gl.TEXTURE_2D,
 				0,
@@ -423,7 +420,7 @@ export class Texture {
 				(o as ArrayBufferTextureOptions).height,
 				o.border ?? 0,
 				o.format ?? gl.RGBA,
-				o.type ?? getWebGLType(gl, o.src),
+				o.type ?? getWebGLType(o.src),
 				o.src,
 			);
 		} else if (o.src)
@@ -962,8 +959,11 @@ export function Box(box?: Partial<Box>) {
 
 export function drawEngine(ctx: WebglContext) {
 	function color(newColor: Color) {
-		ctx.texture.set(whiteTexture);
 		ctx.color.set(newColor);
+	}
+
+	function texture(newTexture: Texture) {
+		ctx.texture.set(newTexture);
 	}
 
 	function strokeWidth(n: number) {
@@ -1222,12 +1222,17 @@ export function drawEngine(ctx: WebglContext) {
 	 */
 	function window(x: number, y: number, x2: number, y2: number) {
 		windowM = orthographic(0, 1, 0, 1, -1, 1);
-		viewMinX = x;
-		viewMinY = y;
+		viewMinX = activeWindow.x = x;
+		viewMinY = activeWindow.y = y;
+		activeWindow.x2 = x2;
+		activeWindow.y2 = y2;
+
 		viewScaleX = 1 / (x2 - x);
 		viewScaleY = 1 / (y2 - y);
 		prevUnitX = 1 / ctx.canvas.width;
 		prevUnitY = 1 / ctx.canvas.height;
+		activeWindow.pw = unitX / viewScaleX;
+		activeWindow.ph = unitY / viewScaleY;
 
 		restoreWindow();
 	}
@@ -1238,6 +1243,7 @@ export function drawEngine(ctx: WebglContext) {
 		LINE_BOX.h = unitY;
 		LINE_BOX.cx = /*unitXHalf =*/ unitX / 2;
 		LINE_BOX.cy = /*unitYHalf =*/ unitY / 2;
+
 		ctx.projection.set(windowM);
 	}
 
@@ -1250,6 +1256,7 @@ export function drawEngine(ctx: WebglContext) {
 	const RECT_M = Matrix();
 	const LINE_BOX = Box();
 	const whiteTexture = ctx.createColorTexture(whiteColor);
+	const activeWindow = { x: 0, y: 0, x2: 0, y2: 0, pw: 0, ph: 0 };
 
 	let windowM = Matrix();
 	let unitX = 1,
@@ -1268,10 +1275,13 @@ export function drawEngine(ctx: WebglContext) {
 	LINE_BOX.cx = 0.5;
 	LINE_BOX.cy = 0.5;
 
+	texture(whiteTexture);
+	resetWindow();
+
 	return {
 		color,
 		putpixel,
-		//draw2DTexture,
+		texture,
 		line,
 		polyline,
 		rect,
@@ -1282,23 +1292,32 @@ export function drawEngine(ctx: WebglContext) {
 		resetWindow,
 		restoreWindow,
 		strokeWidth,
+		activeWindow,
 	};
 }
+
+export type Plugin = (engine: Engine) => {
+	clear(): void;
+	set(node: Node, prop: string, value: unknown): void;
+	load(node: Node, push: (cb: () => void) => void): void;
+};
 
 export interface EngineOptions {
 	canvas: HTMLCanvasElement | OffscreenCanvas;
 
-	readonly root: Node;
+	//readonly root: Node;
 	// Defaults to false
 	autoStart?: boolean;
 	// If present the canvas will be attached to the specified element.
 	container?: HTMLElement | string;
 
+	plugins?: Plugin[];
+
 	// For JSON only, will be passed to update functions.
 	global?: string;
 }
 
-export async function engine(p: EngineOptions) {
+export function engine(p: EngineOptions) {
 	/**
 	 * Renders an image at the specified location.
 	 * Takes an image source (`src`) as input.
@@ -1313,120 +1332,107 @@ export async function engine(p: EngineOptions) {
 	 * It creates a WebGL texture, uploads the image data, sets the texture parameters, and draws the texture to the screen.
 	 * It also handles updating the texture if the `dirty` flag is set in the `TextureComponent` object.
 	 */
-	function texture(p: TextureComponent) {
+	function texture(p: TextureComponent, fill: Color = whiteColor) {
 		const texture = program.createTexture(p);
-
-		render(() => {
-			if (p.dirty) texture.update(p);
+		push(() => {
+			program.color.set(fill);
 			program.texture.set(texture);
-			program.color.set(whiteColor);
-			program.draw();
-		});
-	}
-
-	function fill(p: FillComponent) {
-		render(() => {
-			program.color.set(p.color || whiteColor);
-			program.texture.set(whiteTexture);
-			program.draw();
 		});
 	}
 
 	function boxComponent(box: BoxComponent) {
-		let M = composeBox(Box(box));
-		render(() => {
-			if (box.dirty) M = composeBox(Box(box));
+		const M = composeBox(Box(box));
+
+		push(() => {
+			//if (box.dirty) composeBox(Box(box), M);
 			program.model.push(M);
 		});
 	}
 
-	/*async function model(model: ModelComponent) {
-		const { gltf } = await import('./gltf.js');
-		render(await gltf(program, model.gltf));
-	}*/
+	function set(node: Node, prop: string, value: unknown) {
+		if (plugins) for (const plug of plugins) plug.set(node, prop, value);
+		requestRender();
+	}
 
 	async function load(node: Node) {
 		const { update } = node;
+
+		if (node.texture) texture(node.texture, node.fill);
+		else if (node.fill) push(() => draw.color(node.fill || whiteColor));
+		if (node.image) await image(node.image);
+
+		if (node.box) boxComponent(node.box);
+
+		if (node.draw) {
+			const fn = node.draw;
+			push(() => fn(draw));
+		} //else push(() => program.draw());
+
+		if (plugins) for (const plug of plugins) plug.load(node, push);
+
+		if (node.children) for (const child of node.children) await load(child);
+
+		if (node.box) push(() => program.model.pop());
 
 		if (update) {
 			const fn =
 				typeof update === 'function'
 					? update
 					: new Function('node', 'global', update);
-			render(() => fn(node, global));
+			push(() => fn(node, set, global));
 		}
-		if (node.box) boxComponent(node.box);
-		if (node.fill) fill(node.fill);
-		if (node.texture) texture(node.texture);
-		if (node.image) await image(node.image);
-		//if (node.model) await model(node.model);
+	}
 
-		if (node.children) {
-			const nodes = Array.isArray(node.children)
-				? node.children
-				: Object.values(node.children);
-			for (const child of nodes) await load(child);
-		}
-		if (node.box) render(() => program.model.pop());
+	function push(cb: () => void) {
+		pipeline.push(cb);
+	}
+
+	function render() {
+		renderPending = false;
+		program.clear();
+		if (plugins) for (const plug of plugins) plug.clear();
+		for (const p of pipeline) p();
+	}
+
+	function reset() {
+		stop();
+		pipeline.length = 0;
+	}
+
+	function resize(width: number, height: number) {
+		program.resizeViewport(width, height);
+	}
+
+	function requestRender() {
+		if (renderPending) return;
+		renderPending = true;
+		renderId = requestAnimationFrame(render);
+	}
+
+	function stop() {
+		cancelAnimationFrame(renderId);
 	}
 
 	const program = webgl2(p);
-	const { render, start, stop } = renderer();
-	const whiteTexture = program.createColorTexture(whiteColor);
-	const canvas = program.canvas as HTMLCanvasElement;
+	const canvas = program.canvas;
+	const draw = drawEngine(program);
 	const global = p.global && new Function(p.global)();
+	const pipeline: (() => void)[] = [];
+	let renderId = 0;
+	let renderPending = true;
 
-	/*if (p.container) {
-		const container =
-			typeof p.container === 'string'
-				? document.querySelector(p.container)
-				: p.container;
-		if (!container)
-			throw new Error('Could not find container element: ' + p.container);
-		container.append(canvas);
-	}*/
-
-	await load(p.root);
-
-	if (p.autoStart) start();
-
-	return {
+	const ng = {
 		canvas,
-		start,
-		pause: stop,
-		destroy() {
-			stop();
-			canvas.remove();
-		},
+		load,
+		reset,
+		render,
+		resize,
+		draw,
+		program,
+		stop,
 	};
-}
 
-/**
- * Creates a render context that provides a `render` function to add rendering callbacks to a queue.
- * The `render` function accepts a callback function that will be executed during the render loop.
- */
-export function renderer() {
-	const render: (() => void)[] = [];
-	let af: number;
-	let running = false;
+	const plugins = p.plugins?.map(p => p(ng));
 
-	function renderLoop() {
-		for (const p of render) p();
-		af = requestAnimationFrame(renderLoop);
-	}
-
-	return {
-		render(cb: () => void) {
-			render.push(cb);
-		},
-		start() {
-			if (running) throw 'Engine already started';
-			renderLoop();
-			running = true;
-		},
-		stop() {
-			cancelAnimationFrame(af);
-			running = false;
-		},
-	};
+	return ng;
 }
