@@ -38,7 +38,12 @@ export type ImageComponent = Omit<TextureOptions, 'src'> & {
 };
 export type BoxComponent = Partial<Box>;
 
-export type UpdateFn = string | ((node: Node) => void);
+export type UpdateFn =
+	| string
+	| ((
+			node: Node,
+			set: (node: Node, prop: string, value: unknown) => void,
+	  ) => void);
 export type WebglContext = ReturnType<typeof webgl2>;
 export type DrawEngine = ReturnType<typeof drawEngine>;
 export type UniformType = Float32Array | number[] | number | Texture | Color;
@@ -68,14 +73,30 @@ export type TexImageTextureOptions = TextureBaseOptions & {
 export type TextureOptions = ArrayBufferTextureOptions | TexImageTextureOptions;
 
 export interface Node {
+	/**
+	 * Defines a transform for this node, including position (x, y), size (w, h), scale (sx, sy),
+	 * origin offsets (cx, cy), and rotation (in radians).
+	 */
 	box?: BoxComponent;
-	image?: ImageComponent;
+
+	/**
+	 * Specifies a `TextureComponent` for this node, providing the image or buffer source (`src`)
+	 * and texture parameters (filters, wrapping, format) for rendering.
+	 */
 	texture?: TextureComponent;
+
+	/**
+	 * Specifies child `Node` objects to be recursively loaded and rendered under this node.
+	 */
 	children?: Node[];
+
+	/**
+	 * Specifies a custom update callback or script to run after this node and its children are loaded,
+	 * invoked with (node, set, global) for dynamic updates.
+	 */
 	update?: UpdateFn;
+
 	fill?: Color;
-	draw?: (drawEngine: DrawEngine) => void;
-	//model?: ModelComponent;
 }
 
 /*export interface ModelComponent {
@@ -349,6 +370,7 @@ export function getWebGLType(array: ArrayBufferView): GLenum {
 
 function defaultTextureFormat(array: ArrayBufferView) {
 	const gl = WebGL2RenderingContext;
+
 	if (array instanceof Uint8Array) return gl.RGBA8;
 	if (array instanceof Float32Array) return gl.RGBA32F;
 	if (array instanceof Uint16Array) return gl.RGBA16UI;
@@ -511,6 +533,8 @@ export class Uniform<T extends UniformType> {
 	protected method: ReturnType<typeof getUniformMethod>;
 	protected unit = 0;
 
+	protected stack?: T[];
+
 	constructor(
 		protected program: Program,
 		public readonly name: string,
@@ -540,21 +564,27 @@ export class Uniform<T extends UniformType> {
 	protected initialize(value: T) {
 		this.set(value);
 	}
+
+	pop() {
+		const M2 = (this.stack ??= []).pop();
+		if (!M2) throw new Error('Uniform stack empty');
+		this.set(M2);
+	}
+
+	push(m: T) {
+		(this.stack ??= []).push(this.value);
+		this.set(m);
+	}
 }
 
 export class UniformMatrix extends Uniform<Float32Array> {
-	protected stack: Matrix[] = [];
-
 	push(m: Matrix) {
-		this.stack.push(this.value);
-		if (m !== identity)
-			this.set(this.value === identity ? m : multiply(this.value, m));
+		(this.stack ??= []).push(this.value);
+		if (m !== identity) this.set(m); //this.value === identity ? m : multiply(this.value, m));
 	}
 
-	pop() {
-		const M2 = this.stack.pop();
-		if (!M2) throw new Error('Matrix stack empty');
-		this.set(M2);
+	pushMult(m: Matrix) {
+		this.push(this.value === identity ? m : multiply(this.value, m));
 	}
 
 	set(value: Float32Array) {
@@ -568,6 +598,7 @@ export class UniformMatrix extends Uniform<Float32Array> {
 
 export class UniformTexture {
 	protected location: WebGLUniformLocation;
+	protected stack?: Texture[];
 
 	constructor(
 		protected program: Program,
@@ -578,6 +609,17 @@ export class UniformTexture {
 		this.location = program.location(name);
 		this.program.gl.uniform1i(this.location, this.unit);
 		this.set(value);
+	}
+
+	pop() {
+		const M2 = (this.stack ??= []).pop();
+		if (!M2) throw new Error('Uniform stack empty');
+		this.set(M2);
+	}
+
+	push(m: Texture) {
+		(this.stack ??= []).push(this.value);
+		this.set(m);
 	}
 
 	set(value: Texture) {
@@ -900,8 +942,8 @@ void main() {
 			return new Texture(gl, o);
 		},
 		createColorTexture: ColorTexture.bind(0, gl),
-		draw(count = 6) {
-			gl.drawArrays(gl.TRIANGLES, 0, count);
+		draw(count = 6, offset = 0, mode: number = gl.TRIANGLES) {
+			gl.drawArrays(mode, offset, count);
 		},
 		drawElements: gl.drawElements.bind(gl),
 	};
@@ -966,33 +1008,29 @@ export function drawEngine(ctx: WebglContext) {
 		ctx.texture.set(newTexture);
 	}
 
-	function strokeWidth(n: number) {
-		_strokeWidth = n;
+	function stroke({ width, color }: { width?: number; color?: Color }) {
+		if (width !== undefined) _strokeWidth = width;
+		if (color) _strokeColor = color;
 	}
 
 	function pushDraw(m: Matrix) {
-		ctx.model.push(m);
+		ctx.model.pushMult(m);
 		ctx.draw();
 		ctx.model.pop();
 	}
 
 	function putpixel(x: number, y: number) {
-		PIXEL_M[12] = (x - viewMinX) * viewScaleX;
-		PIXEL_M[13] = (y - viewMinY) * viewScaleY;
+		PIXEL_M[12] = x;
+		PIXEL_M[13] = y;
 		pushDraw(PIXEL_M);
 	}
 
 	function line(x0: number, y0: number, x1: number, y1: number) {
-		const nx0 = (x0 - viewMinX) * viewScaleX;
-		const ny0 = (y0 - viewMinY) * viewScaleY;
-		const nx1 = (x1 - viewMinX) * viewScaleX;
-		const ny1 = (y1 - viewMinY) * viewScaleY;
+		const d = Math.hypot(x1 - x0, y1 - y0);
+		const a = Math.atan2(y1 - y0, x1 - x0);
 
-		const d = Math.hypot(nx1 - nx0, ny1 - ny0);
-		const a = Math.atan2(ny1 - ny0, nx1 - nx0);
-
-		LINE_BOX.x = nx0;
-		LINE_BOX.y = ny0;
+		LINE_BOX.x = x0;
+		LINE_BOX.y = y0;
 		LINE_BOX.w = d;
 		LINE_BOX.h = _strokeWidth * unitY;
 		LINE_BOX.cy = (_strokeWidth * unitY) / 2;
@@ -1012,10 +1050,10 @@ export function drawEngine(ctx: WebglContext) {
 
 		for (let i = 2; i < n; i += 2) {
 			// normalized device‐space coords:
-			const x0 = (points[i - 2] - viewMinX) * viewScaleX;
-			const y0 = Math.max(-1e3, (points[i - 1] - viewMinY) * viewScaleY);
-			const x1 = (points[i] - viewMinX) * viewScaleX;
-			const y1 = Math.min(1e3, (points[i + 1] - viewMinY) * viewScaleY);
+			const x0 = points[i - 2];
+			const y0 = Math.max(-1e3, points[i - 1]);
+			const x1 = points[i];
+			const y1 = Math.min(1e3, points[i + 1]);
 
 			if (Number.isNaN(x0 + y0 + x1 + y1)) {
 				continue;
@@ -1102,11 +1140,20 @@ export function drawEngine(ctx: WebglContext) {
 		pushDraw(RECT_M);
 	}
 
+	/*function scaleX(x: number): number {
+		return (x - viewMinX) * viewScaleX;
+	}
+
+	// normalize a single y coordinate into NDC space
+	function scaleY(y: number): number {
+		return (y - viewMinY) * viewScaleY;
+	}*/
+
 	function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
-		m[0] = w * viewScaleX;
-		m[5] = h * viewScaleY;
-		m[12] = (x - viewMinX) * viewScaleX;
-		m[13] = (y - viewMinY) * viewScaleY;
+		m[0] = w; // * viewScaleX;
+		m[5] = h; // * viewScaleY;
+		m[12] = x; //(x - viewMinX) * viewScaleX;
+		m[13] = y; //(y - viewMinY) * viewScaleY;
 	}
 
 	function fillRect(x: number, y: number, w: number, h: number) {
@@ -1117,29 +1164,119 @@ export function drawEngine(ctx: WebglContext) {
 	function arc(
 		x0: number,
 		y0: number,
-		r: number,
+		rx: number,
+		ry: number,
 		start: number,
 		stop: number,
-		_aspect: number,
 	) {
-		const interval = Math.PI / r / 4;
-		start = start % (Math.PI * 2);
-		stop = stop % (Math.PI * 2);
+		start = ((start % TWOPI) + TWOPI) % TWOPI;
+		stop = ((stop % TWOPI) + TWOPI) % TWOPI;
+		if (stop <= start) stop += TWOPI;
+		const angleRange = stop - start;
 
-		if (start >= stop) stop += Math.PI * 2;
-		let px = x0 + Math.cos(start) * r;
-		let py = y0 - Math.sin(start) * r;
-		for (let i = start + interval; i < stop; i += interval) {
-			line(
-				px,
-				py,
-				(px = x0 + Math.cos(i) * r),
-				(py = y0 - Math.sin(i) * r),
-			);
+		const screenRx = rx; // * viewScaleX * ctx.canvas.width;
+		const screenRy = ry; // * viewScaleY * ctx.canvas.height;
+		// how many pixels per segment you’re comfortable with
+		const maxPixelPerSegment = 1;
+		// number of segments so that each spans at most maxPixelPerSegment
+		const segments = Math.max(
+			4,
+			Math.ceil(
+				(angleRange * Math.max(screenRx, screenRy)) /
+					maxPixelPerSegment,
+			),
+		);
+
+		const delta = angleRange / segments;
+
+		// NDC center and radii
+		const cx = x0;
+		const cy = y0;
+		const ndcRx = rx; // * viewScaleX;
+		const ndcRy = ry; // * viewScaleY;
+
+		// stroke half‐sizes
+		const halfStrokeX = (_strokeWidth * unitX) / 2;
+		const halfStrokeY = (_strokeWidth * unitY) / 2;
+		const outerRx = ndcRx + halfStrokeX;
+		const outerRy = ndcRy + halfStrokeY;
+		const innerRx = Math.max(0, ndcRx - halfStrokeX);
+		const innerRy = Math.max(0, ndcRy - halfStrokeY);
+
+		const fillCount = segments + 2; // center + segments + duplicate first
+		const strokeCount = _strokeWidth > 0 ? (segments + 1) * 2 : 0;
+		const verts = new Float32Array((fillCount + strokeCount) * 3);
+		let o = 0;
+
+		verts[o++] = cx;
+		verts[o++] = cy;
+		verts[o++] = 0;
+
+		// rim of the fill‐fan
+		for (let i = 0; i <= segments; i++) {
+			const a = start + delta * i;
+			const cosA = Math.cos(a);
+			const sinA = Math.sin(a);
+			verts[o++] = cx + cosA * ndcRx;
+			verts[o++] = cy - sinA * ndcRy;
+			verts[o++] = 0;
 		}
+
+		// stroke ring (triangle-strip) immediately after
+		if (strokeCount) {
+			for (let i = 0; i <= segments; i++) {
+				const a = start + delta * i;
+				const cosA = Math.cos(a);
+				const sinA = Math.sin(a);
+				// outer
+				verts[o++] = cx + cosA * outerRx;
+				verts[o++] = cy - sinA * outerRy;
+				verts[o++] = 0;
+				// inner
+				verts[o++] = cx + cosA * innerRx;
+				verts[o++] = cy - sinA * innerRy;
+				verts[o++] = 0;
+			}
+		}
+
+		// now draw everything with one position.set
+		ctx.normal.disable();
+		ctx.texcoord.disable();
+		ctx.tangent.disable();
+
+		ctx.position.set({
+			data: verts.buffer,
+			size: 3,
+			usage: WebGL2RenderingContext.STREAM_DRAW,
+		});
+
+		// draw fill fan
+		ctx.draw(fillCount, 0, WebGL2RenderingContext.TRIANGLE_FAN);
+
+		// draw stroke strip if needed
+		if (strokeCount) {
+			if (_strokeColor) ctx.color.push(_strokeColor);
+			ctx.draw(
+				strokeCount,
+				fillCount,
+				WebGL2RenderingContext.TRIANGLE_STRIP,
+			);
+			if (_strokeColor) ctx.color.pop();
+		}
+
+		// restore
+		ctx.normal.enable();
+		ctx.texcoord.enable();
+		ctx.tangent.enable();
+		ctx.position.reset();
 	}
-	function circle(x0: number, y0: number, radius: number) {
-		arc(x0, y0, radius, 0, 2 * Math.PI, 1);
+
+	function ellipse(x: number, y: number, rx: number, ry: number) {
+		arc(x, y, rx, ry, 0, 2 * Math.PI);
+	}
+
+	function circle(x: number, y: number, radius: number) {
+		arc(x, y, radius, radius, 0, 2 * Math.PI);
 	}
 
 	/*function readScreen() {
@@ -1221,30 +1358,24 @@ export function drawEngine(ctx: WebglContext) {
 	 * allowing rendering to be confined within the specified subregion of the canvas.
 	 */
 	function window(x: number, y: number, x2: number, y2: number) {
-		windowM = orthographic(0, 1, 0, 1, -1, 1);
-		viewMinX = activeWindow.x = x;
-		viewMinY = activeWindow.y = y;
+		windowM = orthographic(x, x2, y2, y, -1, 1);
+		ctx.projection.set(windowM);
+
+		activeWindow.x = x;
+		activeWindow.y = y;
 		activeWindow.x2 = x2;
 		activeWindow.y2 = y2;
 
-		viewScaleX = 1 / (x2 - x);
-		viewScaleY = 1 / (y2 - y);
-		prevUnitX = 1 / ctx.canvas.width;
-		prevUnitY = 1 / ctx.canvas.height;
-		activeWindow.pw = unitX / viewScaleX;
-		activeWindow.ph = unitY / viewScaleY;
+		PIXEL_M[0] = unitX = ctx.canvas.width;
+		PIXEL_M[5] = unitY = ctx.canvas.height;
 
-		restoreWindow();
-	}
+		// how many pixels per world‐unit
+		activeWindow.pw = unitX / (x2 - x);
+		activeWindow.ph = unitY / (y2 - y);
 
-	function restoreWindow() {
-		PIXEL_M[0] = unitX = prevUnitX;
-		PIXEL_M[5] = unitY = prevUnitY;
 		LINE_BOX.h = unitY;
-		LINE_BOX.cx = /*unitXHalf =*/ unitX / 2;
-		LINE_BOX.cy = /*unitYHalf =*/ unitY / 2;
-
-		ctx.projection.set(windowM);
+		LINE_BOX.cx = unitX * 0.5;
+		LINE_BOX.cy = unitY * 0.5;
 	}
 
 	function resetWindow() {
@@ -1257,17 +1388,13 @@ export function drawEngine(ctx: WebglContext) {
 	const LINE_BOX = Box();
 	const whiteTexture = ctx.createColorTexture(whiteColor);
 	const activeWindow = { x: 0, y: 0, x2: 0, y2: 0, pw: 0, ph: 0 };
+	const TWOPI = Math.PI * 2;
 
-	let windowM = Matrix();
+	let windowM = orthographic(0, 1, 0, 1, -1, 1);
 	let unitX = 1,
-		unitY = 1,
-		prevUnitX = 1,
-		prevUnitY = 1;
-	let viewMinX = 0,
-		viewMinY = 0;
-	let viewScaleX = 1,
-		viewScaleY = 1;
-	let _strokeWidth = 1;
+		unitY = 1;
+	let _strokeWidth = 1,
+		_strokeColor: Color | undefined;
 
 	PIXEL_M[0] = 1;
 	PIXEL_M[5] = 1;
@@ -1276,7 +1403,7 @@ export function drawEngine(ctx: WebglContext) {
 	LINE_BOX.cy = 0.5;
 
 	texture(whiteTexture);
-	resetWindow();
+	ctx.projection.set(windowM);
 
 	return {
 		color,
@@ -1290,16 +1417,18 @@ export function drawEngine(ctx: WebglContext) {
 		circle,
 		window,
 		resetWindow,
-		restoreWindow,
-		strokeWidth,
+		stroke,
 		activeWindow,
+		ellipse,
 	};
 }
 
-export type Plugin = (engine: Engine) => {
+export type Plugin = {
 	clear(): void;
 	set(node: Node, prop: string, value: unknown): void;
-	load(node: Node, push: (cb: () => void) => void): void;
+	begin(node: Node, push: (cb: () => void) => void): void;
+	end?(node: Node, push: (cb: () => void) => void): void;
+	resize?(width: number, height: number): void;
 };
 
 export interface EngineOptions {
@@ -1311,8 +1440,6 @@ export interface EngineOptions {
 	// If present the canvas will be attached to the specified element.
 	container?: HTMLElement | string;
 
-	plugins?: Plugin[];
-
 	// For JSON only, will be passed to update functions.
 	global?: string;
 }
@@ -1322,57 +1449,51 @@ export function engine(p: EngineOptions) {
 	 * Renders an image at the specified location.
 	 * Takes an image source (`src`) as input.
 	 */
-	async function image(p: ImageComponent) {
+	/*async function image(p: ImageComponent) {
 		const img = typeof p.src === 'string' ? await loadImage(p.src) : p.src;
 		texture({ ...p, src: img });
-	}
+	}*/
 
 	/**
 	 * Renders a texture to the screen.
 	 * It creates a WebGL texture, uploads the image data, sets the texture parameters, and draws the texture to the screen.
 	 * It also handles updating the texture if the `dirty` flag is set in the `TextureComponent` object.
 	 */
-	function texture(p: TextureComponent, fill: Color = whiteColor) {
+	function texture(p: TextureComponent) {
 		const texture = program.createTexture(p);
-		push(() => {
-			program.color.set(fill);
-			program.texture.set(texture);
-		});
+		push(() => program.texture.push(texture));
 	}
 
 	function boxComponent(box: BoxComponent) {
 		const M = composeBox(Box(box));
 
 		push(() => {
-			//if (box.dirty) composeBox(Box(box), M);
-			program.model.push(M);
+			program.model.pushMult(M);
 		});
 	}
 
 	function set(node: Node, prop: string, value: unknown) {
-		if (plugins) for (const plug of plugins) plug.set(node, prop, value);
+		for (const plug of plugins) plug.set(node, prop, value);
 		requestRender();
 	}
 
 	async function load(node: Node) {
-		const { update } = node;
+		const { update, fill } = node;
 
-		if (node.texture) texture(node.texture, node.fill);
-		else if (node.fill) push(() => draw.color(node.fill || whiteColor));
-		if (node.image) await image(node.image);
+		if (node.texture) texture(node.texture);
+		if (fill) push(() => program.color.push(fill));
 
 		if (node.box) boxComponent(node.box);
 
-		if (node.draw) {
-			const fn = node.draw;
-			push(() => fn(draw));
-		} //else push(() => program.draw());
-
-		if (plugins) for (const plug of plugins) plug.load(node, push);
+		if (plugins) for (const plug of plugins) plug.begin(node, push);
 
 		if (node.children) for (const child of node.children) await load(child);
 
 		if (node.box) push(() => program.model.pop());
+		if (fill) push(() => program.color.pop());
+		if (node.texture) push(() => program.texture.pop());
+
+		if (plugins) for (const plug of plugins) plug.end?.(node, push);
 
 		if (update) {
 			const fn =
@@ -1390,7 +1511,7 @@ export function engine(p: EngineOptions) {
 	function render() {
 		renderPending = false;
 		program.clear();
-		if (plugins) for (const plug of plugins) plug.clear();
+		for (const plug of plugins) plug.clear();
 		for (const p of pipeline) p();
 	}
 
@@ -1401,11 +1522,13 @@ export function engine(p: EngineOptions) {
 
 	function resize(width: number, height: number) {
 		program.resizeViewport(width, height);
+		for (const plug of plugins) plug.resize?.(width, height);
 	}
 
 	function requestRender() {
 		if (renderPending) return;
 		renderPending = true;
+		cancelAnimationFrame(renderId);
 		renderId = requestAnimationFrame(render);
 	}
 
@@ -1413,26 +1536,26 @@ export function engine(p: EngineOptions) {
 		cancelAnimationFrame(renderId);
 	}
 
+	function plugin(plug: Plugin) {
+		plugins.push(plug);
+	}
+
 	const program = webgl2(p);
 	const canvas = program.canvas;
-	const draw = drawEngine(program);
 	const global = p.global && new Function(p.global)();
 	const pipeline: (() => void)[] = [];
+	const plugins: Plugin[] = [];
 	let renderId = 0;
 	let renderPending = true;
 
-	const ng = {
+	return {
 		canvas,
 		load,
 		reset,
 		render,
 		resize,
-		draw,
 		program,
 		stop,
+		plugin,
 	};
-
-	const plugins = p.plugins?.map(p => p(ng));
-
-	return ng;
 }
