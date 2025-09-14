@@ -734,7 +734,7 @@ export function webgl2({
 
 	const program = new Program(
 		`#version 300 es
-precision mediump float;
+precision highp float;
 
 in vec3 v_normal;
 in vec3 v_position;
@@ -1026,14 +1026,16 @@ export function drawEngine(ctx: WebglContext) {
 	}
 
 	function line(x0: number, y0: number, x1: number, y1: number) {
+		//polyline([x0, y0, x1, y1]);
 		const d = Math.hypot(x1 - x0, y1 - y0);
 		const a = Math.atan2(y1 - y0, x1 - x0);
+		const h = _strokeWidth * unitY;
 
 		LINE_BOX.x = x0;
 		LINE_BOX.y = y0;
 		LINE_BOX.w = d;
-		LINE_BOX.h = _strokeWidth * unitY;
-		LINE_BOX.cy = (_strokeWidth * unitY) / 2;
+		LINE_BOX.h = h;
+		LINE_BOX.cy = h / 2;
 		LINE_BOX.rotation = a;
 
 		composeBox(LINE_BOX, LINE_M);
@@ -1045,55 +1047,53 @@ export function drawEngine(ctx: WebglContext) {
 		if (n < 2) return;
 
 		// Each segment is a quad = 2 triangles = 6 vertices
-		const verts = new Float32Array((n - 0) * 3 * 3);
+		const verts = new Float32Array((n / 2 - 1) * 18);
 		let o = 0;
 
-		for (let i = 2; i < n; i += 2) {
-			// normalized device‐space coords:
-			const x0 = points[i - 2];
-			const y0 = Math.max(-1e3, points[i - 1]);
-			const x1 = points[i];
-			const y1 = Math.min(1e3, points[i + 1]);
+		// Calculate half stroke width in world units for each axis independently
+		// to account for non-square aspect ratios.
+		const halfWx = (_strokeWidth * unitX) / 2;
+		const halfWy = (_strokeWidth * unitY) / 2;
 
-			if (Number.isNaN(x0 + y0 + x1 + y1)) {
-				continue;
-			}
+		for (let i = 2; i < n; i += 2) {
+			const x0 = points[i - 2];
+			const y0 = points[i - 1];
+			const x1 = points[i];
+			const y1 = points[i + 1];
+
+			if (Number.isNaN(x0 + y0 + x1 + y1)) continue;
 
 			// direction & normal
 			const dx = x1 - x0;
 			const dy = y1 - y0;
 			const L = Math.hypot(dx, dy) || 1;
-			const ux = dx / L,
-				uy = dy / L;
-			const nx = -uy,
-				ny = ux;
-
-			const halfW = (_strokeWidth * unitY) / 2;
+			const nx = -(dy / L);
+			const ny = dx / L;
 
 			// build two triangles: A+normal, B+normal, B-normal
-			verts[o++] = x0 + nx * halfW;
-			verts[o++] = y0 + ny * halfW;
+			verts[o++] = x0 + nx * halfWx;
+			verts[o++] = y0 + ny * halfWy;
 			verts[o++] = 0;
 
-			verts[o++] = x1 + nx * halfW;
-			verts[o++] = y1 + ny * halfW;
+			verts[o++] = x1 + nx * halfWx;
+			verts[o++] = y1 + ny * halfWy;
 			verts[o++] = 0;
 
-			verts[o++] = x1 - nx * halfW;
-			verts[o++] = y1 - ny * halfW;
+			verts[o++] = x1 - nx * halfWx;
+			verts[o++] = y1 - ny * halfWy;
 			verts[o++] = 0;
 
 			// then A+normal, B-normal, A-normal
-			verts[o++] = x0 + nx * halfW;
-			verts[o++] = y0 + ny * halfW;
+			verts[o++] = x0 + nx * halfWx;
+			verts[o++] = y0 + ny * halfWy;
 			verts[o++] = 0;
 
-			verts[o++] = x1 - nx * halfW;
-			verts[o++] = y1 - ny * halfW;
+			verts[o++] = x1 - nx * halfWx;
+			verts[o++] = y1 - ny * halfWy;
 			verts[o++] = 0;
 
-			verts[o++] = x0 - nx * halfW;
-			verts[o++] = y0 - ny * halfW;
+			verts[o++] = x0 - nx * halfWx;
+			verts[o++] = y0 - ny * halfWy;
 			verts[o++] = 0;
 		}
 
@@ -1140,15 +1140,6 @@ export function drawEngine(ctx: WebglContext) {
 		pushDraw(RECT_M);
 	}
 
-	/*function scaleX(x: number): number {
-		return (x - viewMinX) * viewScaleX;
-	}
-
-	// normalize a single y coordinate into NDC space
-	function scaleY(y: number): number {
-		return (y - viewMinY) * viewScaleY;
-	}*/
-
 	function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
 		m[0] = w; // * viewScaleX;
 		m[5] = h; // * viewScaleY;
@@ -1174,8 +1165,8 @@ export function drawEngine(ctx: WebglContext) {
 		if (stop <= start) stop += TWOPI;
 		const angleRange = stop - start;
 
-		const screenRx = rx; // * viewScaleX * ctx.canvas.width;
-		const screenRy = ry; // * viewScaleY * ctx.canvas.height;
+		const screenRx = Math.abs(rx / unitX); // * viewScaleX * ctx.canvas.width;
+		const screenRy = Math.abs(ry / unitY); // * viewScaleY * ctx.canvas.height;
 		// how many pixels per segment you’re comfortable with
 		const maxPixelPerSegment = 1;
 		// number of segments so that each spans at most maxPixelPerSegment
@@ -1358,7 +1349,7 @@ export function drawEngine(ctx: WebglContext) {
 	 * allowing rendering to be confined within the specified subregion of the canvas.
 	 */
 	function window(x: number, y: number, x2: number, y2: number) {
-		windowM = orthographic(x, x2, y2, y, -1, 1);
+		windowM = orthographic(x, x2, y, y2, -1, 1);
 		ctx.projection.set(windowM);
 
 		activeWindow.x = x;
@@ -1366,16 +1357,15 @@ export function drawEngine(ctx: WebglContext) {
 		activeWindow.x2 = x2;
 		activeWindow.y2 = y2;
 
-		PIXEL_M[0] = unitX = ctx.canvas.width;
-		PIXEL_M[5] = unitY = ctx.canvas.height;
+		PIXEL_M[0] = unitX = (x2 - x) / ctx.canvas.width;
+		PIXEL_M[5] = unitY = (y2 - y) / ctx.canvas.height;
 
 		// how many pixels per world‐unit
-		activeWindow.pw = unitX / (x2 - x);
-		activeWindow.ph = unitY / (y2 - y);
+		activeWindow.pw = unitX; // (x2 - x);
+		activeWindow.ph = unitY; // (y2 - y);
 
 		LINE_BOX.h = unitY;
 		LINE_BOX.cx = unitX * 0.5;
-		LINE_BOX.cy = unitY * 0.5;
 	}
 
 	function resetWindow() {
@@ -1390,20 +1380,15 @@ export function drawEngine(ctx: WebglContext) {
 	const activeWindow = { x: 0, y: 0, x2: 0, y2: 0, pw: 0, ph: 0 };
 	const TWOPI = Math.PI * 2;
 
-	let windowM = orthographic(0, 1, 0, 1, -1, 1);
+	let windowM: Matrix;
+	// width and height of 1 pixel
 	let unitX = 1,
 		unitY = 1;
 	let _strokeWidth = 1,
 		_strokeColor: Color | undefined;
 
-	PIXEL_M[0] = 1;
-	PIXEL_M[5] = 1;
-	LINE_BOX.h = 1;
-	LINE_BOX.cx = 0.5;
-	LINE_BOX.cy = 0.5;
-
 	texture(whiteTexture);
-	ctx.projection.set(windowM);
+	resetWindow();
 
 	return {
 		color,
