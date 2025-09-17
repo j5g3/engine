@@ -5,10 +5,8 @@
 	"homepage": "https://github.com/j5g3/engine",
 	"description": "j5g3",
 	"license": "UNLICENSED",
-	"browser": "index.min.js",
 	"type": "module",
 	"scripts": {
-		"build": "cxl-build",
-		"test": "npm run build && cd ../dist/core && cxl-tester --mjs"
+		"build": "tsc -b tsconfig.json && cp index.html ../dist/demo"
 	}
 }

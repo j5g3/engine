@@ -1,0 +1,998 @@
+import { identity, multiply, orthographic } from './matrix.js';
+
+import type { Matrix } from './matrix.js';
+
+type ArrayBufferTextureOptions = TextureBaseOptions & {
+	src: ArrayBufferView;
+	width: number;
+	height: number;
+};
+
+type TexImageTextureOptions = TextureBaseOptions & {
+	src?: TexImageSource;
+};
+
+type ArrayBufferOptions = {
+	data: ArrayBuffer;
+	size?: number;
+	type?: number;
+	normalized?: boolean;
+	stride?: number;
+	offset?: number;
+	usage?: GLenum;
+};
+
+export type TextureOptions = ArrayBufferTextureOptions | TexImageTextureOptions;
+
+export type UniformType = Float32Array | number[] | number | Texture | Color;
+
+export type Color = readonly [number, number, number, number] | Float32Array;
+
+export type WebglContext = ReturnType<typeof webgl2>;
+
+interface TextureBaseOptions {
+	internalFormat?: GLenum;
+	minFilter?: GLenum;
+	magFilter?: GLenum;
+	wrapS?: GLenum;
+	wrapT?: GLenum;
+	border?: number;
+	format?: GLenum;
+	type?: GLenum;
+}
+
+const whiteColor: Color = [1, 1, 1, 1] as const;
+const blackColor: Color = [0, 0, 0, 1] as const;
+
+function getWebGLType(array: ArrayBufferView): GLenum {
+	const gl = WebGL2RenderingContext;
+	if (array instanceof Uint8Array) return gl.UNSIGNED_BYTE;
+	if (array instanceof Int8Array) return gl.BYTE;
+	if (array instanceof Uint16Array) return gl.UNSIGNED_SHORT;
+	if (array instanceof Int16Array) return gl.SHORT;
+	if (array instanceof Uint32Array) return gl.UNSIGNED_INT;
+	if (array instanceof Int32Array) return gl.INT;
+	if (array instanceof Float32Array) return gl.FLOAT;
+	// WebGL2 supports half float, but you can’t directly create a Float16Array in JS.
+	throw new Error('Unsupported typed array type for WebGL texture upload');
+}
+
+function getUniformMethod(gl: WebGL2RenderingContext, type: number) {
+	switch (type) {
+		case gl.FLOAT:
+			return 'uniform1f';
+		case gl.FLOAT_VEC2:
+			return 'uniform2fv';
+		case gl.FLOAT_VEC3:
+			return 'uniform3fv';
+		case gl.FLOAT_VEC4:
+			return 'uniform4fv';
+
+		case gl.INT_VEC2:
+		case gl.BOOL_VEC2:
+			return 'uniform2iv';
+		case gl.BOOL_VEC3:
+		case gl.INT_VEC3:
+			return 'uniform3iv';
+		case gl.BOOL_VEC4:
+		case gl.INT_VEC4:
+			return 'uniform4iv';
+
+		case gl.UNSIGNED_INT:
+			return 'uniform1ui';
+		case gl.UNSIGNED_INT_VEC2:
+			return 'uniform2uiv';
+		case gl.UNSIGNED_INT_VEC3:
+			return 'uniform3uiv';
+		case gl.UNSIGNED_INT_VEC4:
+			return 'uniform4uiv';
+
+		case gl.FLOAT_MAT2:
+			return 'uniformMatrix2fv';
+		case gl.FLOAT_MAT3:
+			return 'uniformMatrix3fv';
+		case gl.FLOAT_MAT4:
+			return 'uniformMatrix4fv';
+		case gl.FLOAT_MAT2x3:
+			return 'uniformMatrix2x3fv';
+		case gl.FLOAT_MAT2x4:
+			return 'uniformMatrix2x4fv';
+		case gl.FLOAT_MAT3x2:
+			return 'uniformMatrix3x2fv';
+		case gl.FLOAT_MAT3x4:
+			return 'uniformMatrix3x4fv';
+		case gl.FLOAT_MAT4x2:
+			return 'uniformMatrix4x2fv';
+		case gl.FLOAT_MAT4x3:
+			return 'uniformMatrix4x3fv';
+
+		case gl.INT:
+		case gl.BOOL:
+		case gl.SAMPLER_2D:
+		case gl.SAMPLER_CUBE:
+		case gl.SAMPLER_3D:
+		case gl.SAMPLER_2D_SHADOW:
+		case gl.SAMPLER_2D_ARRAY:
+		case gl.SAMPLER_2D_ARRAY_SHADOW:
+		case gl.INT_SAMPLER_2D:
+		case gl.INT_SAMPLER_3D:
+		case gl.INT_SAMPLER_CUBE:
+		case gl.INT_SAMPLER_2D_ARRAY:
+		case gl.UNSIGNED_INT_SAMPLER_2D:
+		case gl.UNSIGNED_INT_SAMPLER_3D:
+		case gl.UNSIGNED_INT_SAMPLER_CUBE:
+		case gl.UNSIGNED_INT_SAMPLER_2D_ARRAY:
+			return 'uniform1i';
+	}
+	throw new Error(`Unknown uniform type: ${type}`);
+}
+
+function defaultTextureFormat(array: ArrayBufferView) {
+	const gl = WebGL2RenderingContext;
+
+	if (array instanceof Uint8Array) return gl.RGBA8;
+	if (array instanceof Float32Array) return gl.RGBA32F;
+	if (array instanceof Uint16Array) return gl.RGBA16UI;
+	if (array instanceof Int16Array) return gl.RGBA16I;
+	if (array instanceof Uint32Array) return gl.RGBA32UI;
+	if (array instanceof Int32Array) return gl.RGBA32I;
+
+	throw new Error('Unsupported typed array type');
+}
+
+/**
+ * Compiles a shader using the given source code and type.
+ *
+ * It takes a WebGLRenderingContext, source code string, and shader type as input.
+ * Creates a shader object, sets its source code, compiles it, and returns the compiled shader object.
+ * If the compilation fails, an error is thrown with the compilation log.
+ */
+function compileShader(
+	gl: WebGLRenderingContext,
+	source: string,
+	type: number,
+) {
+	const result = gl.createShader(type);
+	if (!result) throw new Error(`Could not create shader.`);
+	gl.shaderSource(result, source);
+	gl.compileShader(result);
+
+	if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+		const info = gl.getShaderInfoLog(result);
+		throw new Error(`Could not compile shader.\n${info}`);
+	}
+
+	return result;
+}
+
+export function createCanvas(
+	width: number,
+	height: number,
+	container?: Element,
+) {
+	const element = document.createElement('canvas');
+	element.width = width;
+	element.height = height;
+	if (container) container.appendChild(element);
+	return element;
+}
+
+/**
+ * Creates a WebGL texture with a single pixel of the given color, used for filling shapes with color.
+ */
+export function ColorTexture(gl: WebGL2RenderingContext, color: Color) {
+	return new Texture(gl, {
+		src: color instanceof Float32Array ? color : new Float32Array(color),
+		width: 1,
+		height: 1,
+	});
+}
+
+/**
+ * Creates a WebGL program with the given fragment and vertex shaders.
+ *
+ * It initializes a WebGL context, sets up the rendering pipeline with basic configurations,
+ * compiles the shaders, links the program, and returns an object containing the WebGL context and program.
+ * It also handles error scenarios during shader compilation and program linking.
+ *
+ */
+export class Program {
+	readonly gl: WebGL2RenderingContext;
+	readonly glProgram: WebGLProgram;
+	protected textureUnit = 0;
+
+	constructor(
+		frag: string,
+		vtx: string,
+		public readonly canvas: HTMLCanvasElement | OffscreenCanvas,
+	) {
+		const gl = canvas.getContext('webgl2');
+		if (!gl) throw new Error('Could not create webgl2 canvas context');
+		const glProgram = gl.createProgram();
+		if (!glProgram) throw new Error('Could not create WebGL Program');
+
+		this.gl = gl;
+		this.glProgram = glProgram;
+
+		const vertexShader = compileShader(gl, vtx, gl.VERTEX_SHADER);
+		const fragShader = compileShader(gl, frag, gl.FRAGMENT_SHADER);
+
+		gl.attachShader(glProgram, vertexShader);
+		gl.attachShader(glProgram, fragShader);
+		gl.linkProgram(glProgram);
+
+		if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
+			const infoLog = gl.getProgramInfoLog(glProgram);
+			console.error(infoLog);
+			gl.deleteProgram(glProgram);
+			throw new Error('Could not create WebGL Program');
+		}
+	}
+
+	use() {
+		this.gl.useProgram(this.glProgram);
+	}
+
+	attribute(name: string, data: number[], size = 3) {
+		return new Attribute(this, name, data, size);
+	}
+
+	uniform<T extends UniformType>(name: string, data: T) {
+		return new Uniform<T>(this, name, data);
+	}
+
+	uniformMatrix(name: string, data: Float32Array) {
+		return new UniformMatrix(this, name, data);
+	}
+
+	uniformTexture(name: string, data: Texture) {
+		return new UniformTexture(this, name, data, this.textureUnit++);
+	}
+
+	location(name: string) {
+		const location = this.gl.getUniformLocation(this.glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		return location;
+	}
+
+	uniformInfo(name: string) {
+		const { gl, glProgram } = this;
+		const location = gl.getUniformLocation(glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		const index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
+		const type = gl.getActiveUniform(glProgram, index)?.type ?? -1;
+		const method = getUniformMethod(gl, type);
+
+		return {
+			location,
+			index,
+			type,
+			method,
+		};
+	}
+}
+
+export class Texture {
+	readonly texture: WebGLTexture;
+
+	protected options: TextureOptions = {};
+
+	constructor(
+		protected readonly gl: WebGL2RenderingContext,
+		o: TextureOptions,
+	) {
+		this.texture = gl.createTexture();
+		this.update({
+			wrapS: gl.CLAMP_TO_EDGE,
+			wrapT: o.wrapT ?? gl.CLAMP_TO_EDGE,
+			minFilter: gl.NEAREST,
+			magFilter: gl.NEAREST,
+			...o,
+		});
+	}
+
+	update(o2?: TextureOptions) {
+		const o = this.options;
+		const gl = this.gl;
+
+		gl.bindTexture(gl.TEXTURE_2D, this.texture);
+
+		if (o2) {
+			if (o2.wrapS !== undefined && o.wrapS !== o2.wrapS)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, o2.wrapS);
+
+			if (o2.wrapT !== undefined && o.wrapT !== o2.wrapT)
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, o2.wrapT);
+
+			if (o2.minFilter !== undefined && o.minFilter !== o2.minFilter)
+				gl.texParameteri(
+					gl.TEXTURE_2D,
+					gl.TEXTURE_MIN_FILTER,
+					o2.minFilter,
+				);
+
+			if (o2.magFilter !== undefined && o.magFilter !== o2.magFilter)
+				gl.texParameteri(
+					gl.TEXTURE_2D,
+					gl.TEXTURE_MAG_FILTER,
+					o.magFilter ?? gl.NEAREST,
+				);
+
+			Object.assign(this.options, o2);
+		}
+
+		if (!o.src) return;
+
+		if (ArrayBuffer.isView(o.src)) {
+			const format = o.internalFormat ?? defaultTextureFormat(o.src);
+			gl.texImage2D(
+				gl.TEXTURE_2D,
+				0,
+				format,
+				(o as ArrayBufferTextureOptions).width,
+				(o as ArrayBufferTextureOptions).height,
+				o.border ?? 0,
+				o.format ?? gl.RGBA,
+				o.type ?? getWebGLType(o.src),
+				o.src,
+			);
+		} else if (o.src)
+			gl.texImage2D(
+				gl.TEXTURE_2D,
+				0,
+				o.internalFormat ?? gl.RGBA,
+				o.internalFormat ?? gl.RGBA,
+				gl.UNSIGNED_BYTE,
+				o.src,
+			);
+	}
+}
+
+export class Attribute {
+	protected location: number;
+	protected buffer: WebGLBuffer;
+	protected initial: ArrayBufferOptions;
+
+	constructor(
+		protected program: Program,
+		public readonly name: string,
+		data: number[],
+		size = 3,
+	) {
+		const gl = program.gl;
+		this.location = gl.getAttribLocation(program.glProgram, name);
+		const buffer = gl.createBuffer();
+		if (!buffer) throw new Error('Could not create buffer');
+		this.buffer = buffer;
+		this.initial = { data: new Float32Array(data).buffer, size };
+		this.set(this.initial);
+		this.enable();
+	}
+
+	enable() {
+		this.program.gl.enableVertexAttribArray(this.location);
+	}
+
+	disable() {
+		this.program.gl.disableVertexAttribArray(this.location);
+	}
+
+	reset() {
+		this.set(this.initial);
+	}
+
+	set({
+		data,
+		size,
+		normalized,
+		type,
+		stride,
+		offset,
+		usage,
+	}: ArrayBufferOptions) {
+		const gl = this.program.gl;
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+		gl.bufferData(gl.ARRAY_BUFFER, data, usage ?? gl.STATIC_DRAW);
+		gl.vertexAttribPointer(
+			this.location,
+			size ?? 3,
+			type ?? gl.FLOAT,
+			normalized ?? false,
+			stride ?? 0,
+			offset ?? 0,
+		);
+	}
+}
+
+export class Uniform<T extends UniformType> {
+	readonly location: WebGLUniformLocation;
+	readonly type: GLenum;
+	readonly index: number;
+
+	protected initial: T;
+	protected method: ReturnType<typeof getUniformMethod>;
+	protected unit = 0;
+
+	protected stack?: T[];
+
+	constructor(
+		protected program: Program,
+		public readonly name: string,
+		public readonly value: T,
+	) {
+		const { gl, glProgram } = program;
+		const location = gl.getUniformLocation(glProgram, name);
+		if (!location) throw new Error('Invalid uniform location');
+		this.location = location;
+		this.index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
+		this.type = gl.getActiveUniform(glProgram, this.index)?.type ?? -1;
+		this.method = getUniformMethod(gl, this.type);
+		this.initial = value;
+		this.initialize(value);
+	}
+
+	reset() {
+		this.set(this.initial);
+	}
+
+	set(value: T) {
+		const gl = this.program.gl;
+		(this.value as T) = value;
+		gl[this.method as 'uniform1i'](this.location, value as number);
+	}
+
+	protected initialize(value: T) {
+		this.set(value);
+	}
+
+	pop() {
+		const M2 = (this.stack ??= []).pop();
+		if (!M2) throw new Error('Uniform stack empty');
+		this.set(M2);
+	}
+
+	push(m: T) {
+		(this.stack ??= []).push(this.value);
+		this.set(m);
+	}
+}
+
+export class UniformMatrix extends Uniform<Float32Array> {
+	push(m: Matrix) {
+		(this.stack ??= []).push(this.value);
+		if (m !== identity) this.set(m); //this.value === identity ? m : multiply(this.value, m));
+	}
+
+	pushMult(m: Matrix) {
+		this.push(this.value === identity ? m : multiply(this.value, m));
+	}
+
+	set(value: Float32Array) {
+		this.program.gl[this.method as 'uniformMatrix4x3fv'](
+			this.location,
+			false,
+			value,
+		);
+	}
+}
+
+export class UniformTexture {
+	protected location: WebGLUniformLocation;
+	protected stack?: Texture[];
+
+	constructor(
+		protected program: Program,
+		public readonly name: string,
+		public readonly value: Texture,
+		protected unit: number,
+	) {
+		this.location = program.location(name);
+		this.program.gl.uniform1i(this.location, this.unit);
+		this.set(value);
+	}
+
+	pop() {
+		const M2 = (this.stack ??= []).pop();
+		if (!M2) throw new Error('Uniform stack empty');
+		this.set(M2);
+	}
+
+	push(m: Texture) {
+		(this.stack ??= []).push(this.value);
+		this.set(m);
+	}
+
+	set(value: Texture) {
+		const gl = this.program.gl;
+		gl.activeTexture(gl.TEXTURE0 + this.unit);
+		gl.bindTexture(gl.TEXTURE_2D, value.texture);
+	}
+}
+
+/**
+ * Creates a WebGL 2.0 context with default shaders.
+ *
+ * This function initializes a WebGL 2.0 context, sets up a default shader program,
+ * creates and binds buffers for vertex position and texture coordinates, and configures
+ * initial state for rendering.
+ * It also provides methods for manipulating the model-view matrix (`pushMatrix` and `popMatrix`)
+ * for transformations.
+ */
+export function webgl2({
+	canvas,
+}: {
+	canvas: OffscreenCanvas | HTMLCanvasElement;
+}) {
+	function createBuffer() {
+		const buffer = gl.createBuffer();
+		if (!buffer) throw new Error('Could not create buffer');
+		return buffer;
+	}
+
+	function setIndices(data: ArrayBuffer | ArrayBufferView) {
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indicesBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+	}
+
+	function resizeViewport(width: number, height: number) {
+		gl.viewport(0, 0, width, height);
+		resolution.set([width, height]);
+	}
+
+	function clear() {
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	}
+
+	const program = new Program(
+		`#version 300 es
+precision highp float;
+
+in vec3 v_normal;
+in vec3 v_position;
+in vec2 v_texcoord;
+in vec3 v_tangent;  
+in vec2 v_lineUV;
+
+uniform sampler2D u_texture;
+uniform sampler2D u_normalTexture;
+uniform sampler2D u_metallicTexture;
+uniform sampler2D u_roughnessTexture;
+uniform sampler2D u_aoTexture;
+uniform vec3 u_lightPosition;
+uniform vec3 u_cameraPosition;
+uniform vec4 u_color;
+
+uniform float u_strokeWidth;   // width in pixels
+uniform float u_capType;
+
+uniform lowp int u_renderMode; // 0 = draw, 1 = line, 2 = PBR lit
+
+out vec4 outColor;
+
+#define PI 3.14159265359
+
+// Function to transform normal from tangent space to world space
+vec3 getNormalFromMap() {
+    vec3 tangentNormal = texture(u_normalTexture, v_texcoord).rgb * 2.0 - 1.0;
+    
+    vec3 N = normalize(v_normal);
+    vec3 T = normalize(v_tangent);
+    vec3 B = normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+    
+    return normalize(TBN * tangentNormal);
+}
+
+vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, vec3 normal, vec3 fragPos) {
+    vec3 lightColor = vec3(1.0);
+    vec3 lightDir = normalize(u_lightPosition - fragPos);
+    vec3 viewDir = normalize(u_cameraPosition - fragPos);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    
+    float distance = max(length(u_lightPosition - fragPos), 1e-6);
+    float attenuation = 1.0 / (distance * distance);
+    vec3 radiance = lightColor * attenuation;
+    
+    // Ambient
+    vec4 ambient = ao * albedo;
+    
+    // Diffuse (Lambertian)
+    float dotNormalLight = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = dotNormalLight * albedo.rgb;
+    
+    // Specular (Cook-Torrance BRDF)
+    float roughnessSq = roughness * roughness;
+    
+    // Avoid division by zero
+    float NdotH = max(dot(normal, halfwayDir), 0.0001);
+    float dotNormalView = max(dot(normal, viewDir), 0.0001);
+    float VdotH = max(dot(viewDir, halfwayDir), 0.0001);
+    
+    // Distribution (Trowbridge-Reitz / GGX)
+    float nom = roughnessSq;
+    float denom = (NdotH * NdotH * (roughnessSq - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    float distribution = nom / max(denom, 1e-6);
+    
+    // Fresnel-Schlick approximation with metallic
+    vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
+    // Fixed: Use VdotH instead of dot(normal, viewDir)
+    vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+    
+    // Geometry (Smith's method with Schlick-GGX)
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float GGX1 = dotNormalView / (dotNormalView * (1.0 - k) + k);
+    float GGX2 = dotNormalLight / (dotNormalLight * (1.0 - k) + k);
+    float geometry = GGX1 * GGX2;
+    
+    vec3 specular = (distribution * geometry * fresnel) / max(4.0 * dotNormalLight * dotNormalView, 0.0001);
+    
+    // Only add specular if dotNormalLight is positive
+    vec3 finalSpecular = dotNormalLight > 0.0 ? specular : vec3(0.0);
+    
+    return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
+}
+
+void main() {
+    vec4 albedo = texture(u_texture, v_texcoord) * u_color;
+	
+    if (u_renderMode == 0) {
+        outColor = albedo;
+        return;
+	}
+	// LINE BRANCH 
+	if (u_renderMode == 1) {
+		float halfW    = u_strokeWidth * 0.5;
+		float aaWidth  = max(fwidth(v_lineUV.y) * halfW, 1.0);
+		float pixelDist = abs(v_lineUV.y) * halfW;
+		float alpha = 1.0;
+		if (pixelDist > halfW) {
+			alpha = 1.0 - smoothstep(halfW, halfW + aaWidth, pixelDist);
+		}
+								  
+		if (alpha <= 0.0) discard;
+		
+		// Handle line caps
+		if (v_lineUV.x < 0.0 || v_lineUV.x > 1.0) {
+			if (u_capType == 0.0) {
+				// Butt cap - hard cutoff
+				discard;
+			} else if (u_capType == 1.0) {
+				// Square cap - already handled by vertex shader extension
+				// Just apply the edge antialiasing
+			} else if (u_capType == 2.0) {
+				// Round cap - signed distance field approach
+				/*vec2 capCenter = vec2(clamp(v_lineUV.x, 0.0, 1.0), 0.0);
+				float capDist = distance(v_lineUV, capCenter);
+				alpha *= 1.0 - smoothstep(1.0 - aaWidth, 1.0 + aaWidth, capDist);*/
+    float tC = clamp(v_lineUV.x, 0.0, 1.0);
+    // 2) build a pixel‐space offset vector:
+    //    x: how far beyond the line segment we are in UV, times halfW
+    //    y: v_lineUV.y already ±1, times halfW gives vertical offset in pixels
+    vec2 pixelOff = vec2(
+        (v_lineUV.x - tC) * halfW,
+        v_lineUV.y        * halfW
+    );
+    // 3) true distance in pixels from the cap‐center
+    float dist = length(pixelOff);
+    // 4) do a smoothstep around radius=halfW
+    alpha *= 1.0 - smoothstep(
+        halfW - aaWidth,
+        halfW + aaWidth,
+        dist
+    );
+			}
+		}
+
+		// Apply alpha and early exit if fully transparent
+		if (alpha <= 0.0) discard;
+
+		// Output premultiplied alpha
+		float finalAlpha = albedo.a * alpha;
+		outColor = vec4(albedo.rgb * finalAlpha, finalAlpha);
+		return;
+	}
+    
+    // Use the proper normal map transformation
+    vec3 normal = getNormalFromMap();
+    
+    float metallic = texture(u_metallicTexture, v_texcoord).r;
+    float roughness = texture(u_roughnessTexture, v_texcoord).r;
+    float ao = texture(u_aoTexture, v_texcoord).r;
+    
+    outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
+}
+`,
+		`#version 300 es
+precision highp float;
+
+in vec3 a_position;
+in vec3 a_normal;
+in vec2 a_texcoord;
+in vec3 a_tangent;
+in vec4 a_data0;  // p0.xy, p1.xy for line mode
+in vec4 a_data1;  // t, side, next.xy for line mode
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat4 u_normalMatrix;
+uniform lowp int u_renderMode; // 0 = draw, 1 = line, 2 = PBR lit
+uniform vec2 u_resolution;     // viewport resolution for pixel-perfect lines
+
+// Line Uniforms
+uniform float u_capType;       // 0=butt, 1=square, 2=round
+uniform float u_joinType;      // 0=none, 1=miter, 2=bevel, 3=round
+uniform float u_strokeWidth;   // width in pixels
+uniform float u_miterLimit;    // miter limit for sharp angles
+
+out vec3 v_position;
+out vec3 v_normal;
+out vec2 v_texcoord;
+out vec3 v_tangent;
+out vec2 v_lineUV;
+
+const float CAP_BUTT = 0.0;
+const float CAP_SQUARE = 1.0;
+const float CAP_ROUND = 2.0;
+
+const float JOIN_NONE = 0.0;
+const float JOIN_MITER = 1.0;
+const float JOIN_BEVEL = 2.0;
+const float JOIN_ROUND = 3.0;
+
+const float EPSILON = 1e-6;
+
+vec2 safeNormalize(vec2 v) {
+    float len = length(v);
+    return len > EPSILON ? v / len : vec2(0.0, 1.0);
+}
+
+vec4 transformToClip(vec2 worldPos) {
+    return u_projection * u_view * u_model * vec4(worldPos, 0.0, 1.0);
+}
+
+vec2 clipToScreen(vec4 clipPos) {
+    vec2 ndc = clipPos.xy / clipPos.w;
+    return (ndc + 1.0) * 0.5 * u_resolution;
+}
+
+vec4 screenToClip(vec2 screenPos, float w) {
+    vec2 ndc = (screenPos / u_resolution) * 2.0 - 1.0;
+    return vec4(ndc * w, 0.0, w);
+}
+
+void main() {
+    // Line rendering mode
+    if (u_renderMode == 1) {
+        vec2 p0 = a_data0.xy;
+        vec2 p1 = a_data0.zw;
+        vec2 next = a_data1.zw;
+        
+        float t = a_data1.x;
+        float side = a_data1.y;
+        
+        // Transform to clip space
+        vec4 clip0 = transformToClip(p0);
+        vec4 clip1 = transformToClip(p1);
+        
+        // Handle near-clipping plane issues
+        if (clip0.w <= 0.0 && clip1.w <= 0.0) {
+            gl_Position = vec4(0.0, 0.0, -1.0, 1.0);
+            return;
+        }
+        
+        // Work in NDC space (normalized device coordinates)
+        vec2 ndc0 = clip0.xy / clip0.w;
+        vec2 ndc1 = clip1.xy / clip1.w;
+        
+        // Calculate line direction and normal in NDC
+        vec2 lineDir = ndc1 - ndc0;
+        float lineLength = length(lineDir);
+        
+        if (lineLength < EPSILON) {
+            gl_Position = mix(clip0, clip1, t);
+            return;
+        }
+        
+        lineDir = lineDir / lineLength;
+        vec2 lineNormal = vec2(-lineDir.y, lineDir.x);
+        
+        // Current position along the line
+        //vec2 currentNDC = mix(ndc0, ndc1, t);
+        //float currentW = mix(clip0.w, clip1.w, t);
+        float tc        = clamp(t, 0.0, 1.0);
+        vec2 currentNDC = mix(ndc0, ndc1, tc);
+        float currentW  = mix(clip0.w, clip1.w, tc);
+		// Convert stroke width in pixels → NDC
+		float halfWidthNDC = u_strokeWidth * 0.5 / u_resolution.y;
+		
+		bool isStartCap = t < 0.0;
+        bool isEndCap = t > 1.0;
+        
+        if (u_capType != CAP_BUTT && (isStartCap || isEndCap)) {
+            if (u_capType == CAP_SQUARE) {
+                // Square cap: extend along line direction
+                //float capDirection = isStartCap ? -1.0 : 1.0;
+                //currentNDC += lineDir * (halfWidthNDC * capDirection);
+                float dir = isStartCap ? -1.0 : 1.0;
+                currentNDC += lineDir * (halfWidthNDC * dir);
+            }
+            // For round caps, the geometry should include additional vertices
+            // that form a semicircle. The shader just positions them correctly.
+            /*else if (u_capType == CAP_ROUND) {
+                // For round caps, you need additional vertices in your geometry
+                // This shader just handles the basic positioning
+                // The fragment shader will handle the actual rounding
+                if (isStartCap) {
+                    // For start cap, extend backwards
+                    currentNDC -= lineDir * halfWidthNDC;
+                } else {
+                    // For end cap, extend forwards  
+                    currentNDC += lineDir * halfWidthNDC;
+                }
+            }*/
+        }
+
+        // Handle line joins
+        vec2 finalNormal = lineNormal;
+        float normalScale = 1.0;
+
+		if (u_joinType > JOIN_NONE && isEndCap && length(next) > EPSILON) {
+            vec2 nextPoint = next;
+            vec4 clipNext = transformToClip(nextPoint);
+            
+            if (clipNext.w > 0.0) {
+                vec2 ndcNext = clipNext.xy / clipNext.w;
+                vec2 nextDir = ndcNext - ndc1;
+                float nextLength = length(nextDir);
+                
+                if (nextLength > EPSILON) {
+                    nextDir = nextDir / nextLength;
+                    vec2 nextNormal = vec2(-nextDir.y, nextDir.x);
+                    
+                    // Calculate angle between segments
+                    float cosAngle = dot(lineDir, nextDir);
+                    
+                    if (cosAngle < 0.999) { // Only join if there's a meaningful angle
+                        if (u_joinType == JOIN_MITER) {
+                            // Miter join
+                            vec2 miterDir = safeNormalize(lineNormal + nextNormal);
+                            float miterLength = 1.0 / max(dot(miterDir, lineNormal), EPSILON);
+                            
+                            // Apply miter limit
+                            if (miterLength <= u_miterLimit) {
+                                finalNormal = miterDir;
+                                normalScale = miterLength;
+                            } else {
+                                // Fall back to bevel
+                                finalNormal = lineNormal;
+                            }
+                        } else if (u_joinType == JOIN_BEVEL) {
+                            // Use the next segment's normal for smoother transition
+                            float blendFactor = smoothstep(0.9, 1.0, t);
+                            finalNormal = mix(lineNormal, nextNormal, blendFactor);
+                            finalNormal = safeNormalize(finalNormal);
+                        } else if (u_joinType == JOIN_ROUND) {
+                            // For round joins, we'd need additional geometry
+                            // For now, use a smooth transition
+                            float blendFactor = smoothstep(0.8, 1.0, t);
+                            finalNormal = mix(lineNormal, nextNormal, blendFactor);
+                            finalNormal = safeNormalize(finalNormal);
+                        }
+                    }
+                }
+            }
+        }
+        
+		vec2 offset = finalNormal * (halfWidthNDC * normalScale * side);
+		vec2 finalNDC = currentNDC + offset;
+		gl_Position = vec4(finalNDC * currentW, 0.0, currentW);
+        
+        // Set varyings for fragment shader
+        v_lineUV = vec2(t, side);
+        
+        return;
+    }
+    
+    // Standard mesh rendering
+    vec4 worldPosition = u_model * vec4(a_position, 1.0);
+    v_position = worldPosition.xyz;
+    v_normal = normalize(mat3(u_normalMatrix) * a_normal);
+    v_tangent = normalize(mat3(u_normalMatrix) * a_tangent);
+    v_texcoord = a_texcoord;
+    gl_Position = u_projection * u_view * worldPosition;
+}`,
+		canvas,
+	);
+	const { gl } = program;
+
+	program.use();
+
+	gl.clearColor(0, 0, 0, 0);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	gl.enable(gl.BLEND);
+	gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+	const indicesBuffer = createBuffer();
+	const resolution = program.uniform('u_resolution', [0, 0]);
+
+	return {
+		position: program.attribute(
+			'a_position',
+			[0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0],
+		),
+		normal: program.attribute(
+			'a_normal',
+			[0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+		),
+		tangent: program.attribute(
+			'a_tangent',
+			[1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+		),
+		texcoord: program.attribute(
+			'a_texcoord',
+			[0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0],
+			2,
+		),
+
+		data0: program.attribute('a_data0', [], 4),
+		data1: program.attribute('a_data1', [], 4),
+
+		lightPosition: program.uniform('u_lightPosition', [0.5, 0.5, 1.0]),
+		cameraPosition: program.uniform('u_cameraPosition', [0.0, 0.0, 1.0]),
+		resolution,
+
+		capType: program.uniform<number>('u_capType', 1.0),
+		joinType: program.uniform<number>('u_joinType', 0),
+		strokeWidth: program.uniform<number>('u_strokeWidth', 1.0),
+		miterLimit: program.uniform<number>('u_miterLimit', 4),
+
+		model: program.uniformMatrix('u_model', identity),
+		view: program.uniformMatrix('u_view', identity),
+		projection: program.uniformMatrix(
+			'u_projection',
+			orthographic(0, gl.canvas.width, gl.canvas.height, 0, -1, 1),
+		),
+		normalMatrix: program.uniformMatrix('u_normalMatrix', identity),
+
+		color: program.uniform('u_color', whiteColor),
+		renderMode: program.uniform<number>('u_renderMode', 0),
+
+		texture: program.uniformTexture(
+			'u_texture',
+			ColorTexture(gl, whiteColor),
+		),
+		normalTexture: program.uniformTexture(
+			'u_normalTexture',
+			ColorTexture(gl, blackColor),
+		),
+		metallicTexture: program.uniformTexture(
+			'u_metallicTexture',
+			ColorTexture(gl, blackColor),
+		),
+		roughnessTexture: program.uniformTexture(
+			'u_roughnessTexture',
+			ColorTexture(gl, blackColor),
+		),
+		aoTexture: program.uniformTexture(
+			'u_aoTexture',
+			ColorTexture(gl, whiteColor),
+		),
+
+		canvas: gl.canvas,
+		clear,
+		resizeViewport,
+		setIndices,
+		createTexture(o: TextureOptions) {
+			return new Texture(gl, o);
+		},
+		createColorTexture: ColorTexture.bind(0, gl),
+		draw(count = 6, offset = 0, mode: number = gl.TRIANGLES) {
+			gl.drawArrays(mode, offset, count);
+		},
+		drawElements: gl.drawElements.bind(gl),
+	};
+}

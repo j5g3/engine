@@ -1,1 +1,33 @@
-<script type="module" src="clock.js"></script>
+<style>
+	body,
+	html {
+		padding: 0;
+		margin: 0;
+	}
+	#canvas {
+		margin: 32px auto;
+		display: block;
+		max-width: calc(100% - 32px);
+		aspect-ratio: 16 / 9;
+		border: 1px solid #ccc;
+	}
+	#toolbar {
+		display: flex;
+		gap: 16px;
+		align-items: center;
+		height: 42px;
+		padding: 4px 16px;
+		border-bottom: 1px solid #ccc;
+		justify-content: right;
+	}
+</style>
+<div id="toolbar">
+	<select id="demo">
+		<option>life.js</option>
+		<option>lines.js</option>
+	</select>
+</div>
+<div id="stage">
+	<canvas width="1280" height="720" id="canvas"></canvas>
+</div>
+<script type="module" src="index.js"></script>
