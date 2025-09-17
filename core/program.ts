@@ -564,6 +564,7 @@ uniform vec4 u_color;
 
 uniform float u_strokeWidth;   // width in pixels
 uniform float u_capType;
+uniform float u_joinType;      // 0=none, 1=miter, 2=bevel, 3=round
 
 uniform lowp int u_renderMode; // 0 = draw, 1 = line, 2 = PBR lit
 
@@ -652,8 +653,20 @@ void main() {
 								  
 		if (alpha <= 0.0) discard;
 		
+		bool isJoinVertex = abs(v_lineUV.x - 1.0) < 1e-6;
+		
+		if (isJoinVertex && u_joinType > 0.0) {
+			if (u_joinType == 3.0) { // Round Join
+				float dist = length(v_tangent.xy);
+				alpha = 1.0 - smoothstep(
+					halfW - aaWidth,
+					halfW + aaWidth,
+					dist
+				);
+			}
+		}
 		// Handle line caps
-		if (v_lineUV.x < 0.0 || v_lineUV.x > 1.0) {
+		else if (v_lineUV.x < 0.0 || v_lineUV.x > 1.0) {
 			if (u_capType == 0.0) {
 				// Butt cap - hard cutoff
 				discard;
@@ -662,25 +675,17 @@ void main() {
 				// Just apply the edge antialiasing
 			} else if (u_capType == 2.0) {
 				// Round cap - signed distance field approach
-				/*vec2 capCenter = vec2(clamp(v_lineUV.x, 0.0, 1.0), 0.0);
-				float capDist = distance(v_lineUV, capCenter);
-				alpha *= 1.0 - smoothstep(1.0 - aaWidth, 1.0 + aaWidth, capDist);*/
-    float tC = clamp(v_lineUV.x, 0.0, 1.0);
-    // 2) build a pixel‐space offset vector:
-    //    x: how far beyond the line segment we are in UV, times halfW
-    //    y: v_lineUV.y already ±1, times halfW gives vertical offset in pixels
-    vec2 pixelOff = vec2(
-        (v_lineUV.x - tC) * halfW,
-        v_lineUV.y        * halfW
-    );
-    // 3) true distance in pixels from the cap‐center
-    float dist = length(pixelOff);
-    // 4) do a smoothstep around radius=halfW
-    alpha *= 1.0 - smoothstep(
-        halfW - aaWidth,
-        halfW + aaWidth,
-        dist
-    );
+				float tC = clamp(v_lineUV.x, 0.0, 1.0);
+				vec2 pixelOff = vec2(
+					(v_lineUV.x - tC) * halfW,
+					v_lineUV.y        * halfW
+				);
+				float dist = length(pixelOff);
+				alpha *= 1.0 - smoothstep(
+					halfW - aaWidth,
+					halfW + aaWidth,
+					dist
+				);
 			}
 		}
 
@@ -771,6 +776,8 @@ void main() {
         
         float t = a_data1.x;
         float side = a_data1.y;
+
+        v_lineUV = vec2(t, side);
         
         // Transform to clip space
         vec4 clip0 = transformToClip(p0);
@@ -781,13 +788,12 @@ void main() {
             gl_Position = vec4(0.0, 0.0, -1.0, 1.0);
             return;
         }
+
+        // To correctly handle aspect ratio, we do calculations in screen space
+        vec2 screen0 = clipToScreen(clip0);
+        vec2 screen1 = clipToScreen(clip1);
         
-        // Work in NDC space (normalized device coordinates)
-        vec2 ndc0 = clip0.xy / clip0.w;
-        vec2 ndc1 = clip1.xy / clip1.w;
-        
-        // Calculate line direction and normal in NDC
-        vec2 lineDir = ndc1 - ndc0;
+        vec2 lineDir = screen1 - screen0;
         float lineLength = length(lineDir);
         
         if (lineLength < EPSILON) {
@@ -798,99 +804,73 @@ void main() {
         lineDir = lineDir / lineLength;
         vec2 lineNormal = vec2(-lineDir.y, lineDir.x);
         
-        // Current position along the line
-        //vec2 currentNDC = mix(ndc0, ndc1, t);
-        //float currentW = mix(clip0.w, clip1.w, t);
-        float tc        = clamp(t, 0.0, 1.0);
-        vec2 currentNDC = mix(ndc0, ndc1, tc);
+        // Position on the line segment
+        float tc = clamp(t, 0.0, 1.0);
+        vec2 currentScreen = mix(screen0, screen1, tc);
         float currentW  = mix(clip0.w, clip1.w, tc);
-		// Convert stroke width in pixels → NDC
-		float halfWidthNDC = u_strokeWidth * 0.5 / u_resolution.y;
-		
+        
+        float halfW = u_strokeWidth * 0.5;
+        
 		bool isStartCap = t < 0.0;
         bool isEndCap = t > 1.0;
+		bool isJoinVertex = (abs(t - 1.0) < EPSILON) || (abs(t - 0.0) < EPSILON);
         
         if (u_capType != CAP_BUTT && (isStartCap || isEndCap)) {
-            if (u_capType == CAP_SQUARE) {
-                // Square cap: extend along line direction
-                //float capDirection = isStartCap ? -1.0 : 1.0;
-                //currentNDC += lineDir * (halfWidthNDC * capDirection);
-                float dir = isStartCap ? -1.0 : 1.0;
-                currentNDC += lineDir * (halfWidthNDC * dir);
-            }
-            // For round caps, the geometry should include additional vertices
-            // that form a semicircle. The shader just positions them correctly.
-            /*else if (u_capType == CAP_ROUND) {
-                // For round caps, you need additional vertices in your geometry
-                // This shader just handles the basic positioning
-                // The fragment shader will handle the actual rounding
-                if (isStartCap) {
-                    // For start cap, extend backwards
-                    currentNDC -= lineDir * halfWidthNDC;
-                } else {
-                    // For end cap, extend forwards  
-                    currentNDC += lineDir * halfWidthNDC;
-                }
-            }*/
+			float dir = isStartCap ? -1.0 : 1.0;
+			currentScreen += lineDir * (halfW * dir);
         }
 
         // Handle line joins
         vec2 finalNormal = lineNormal;
         float normalScale = 1.0;
 
-		if (u_joinType > JOIN_NONE && isEndCap && length(next) > EPSILON) {
-            vec2 nextPoint = next;
-            vec4 clipNext = transformToClip(nextPoint);
-            
-            if (clipNext.w > 0.0) {
-                vec2 ndcNext = clipNext.xy / clipNext.w;
-                vec2 nextDir = ndcNext - ndc1;
-                float nextLength = length(nextDir);
-                
-                if (nextLength > EPSILON) {
-                    nextDir = nextDir / nextLength;
-                    vec2 nextNormal = vec2(-nextDir.y, nextDir.x);
-                    
-                    // Calculate angle between segments
-                    float cosAngle = dot(lineDir, nextDir);
-                    
-                    if (cosAngle < 0.999) { // Only join if there's a meaningful angle
-                        if (u_joinType == JOIN_MITER) {
-                            // Miter join
-                            vec2 miterDir = safeNormalize(lineNormal + nextNormal);
-                            float miterLength = 1.0 / max(dot(miterDir, lineNormal), EPSILON);
-                            
-                            // Apply miter limit
-                            if (miterLength <= u_miterLimit) {
-                                finalNormal = miterDir;
-                                normalScale = miterLength;
-                            } else {
-                                // Fall back to bevel
-                                finalNormal = lineNormal;
-                            }
-                        } else if (u_joinType == JOIN_BEVEL) {
-                            // Use the next segment's normal for smoother transition
-                            float blendFactor = smoothstep(0.9, 1.0, t);
-                            finalNormal = mix(lineNormal, nextNormal, blendFactor);
-                            finalNormal = safeNormalize(finalNormal);
-                        } else if (u_joinType == JOIN_ROUND) {
-                            // For round joins, we'd need additional geometry
-                            // For now, use a smooth transition
-                            float blendFactor = smoothstep(0.8, 1.0, t);
-                            finalNormal = mix(lineNormal, nextNormal, blendFactor);
-                            finalNormal = safeNormalize(finalNormal);
-                        }
-                    }
-                }
+		// - t ~ 1.0 : join at p1, next is the following point (outgoing)
+		// - t ~ 0.0 : join at p0, next contains the previous point (incoming)
+		if (u_joinType > JOIN_NONE && isJoinVertex && length(next) > EPSILON) {
+
+    if (abs(t - 1.0) < EPSILON) {
+        vec4 clipNext = transformToClip(next);
+        if (clipNext.w > 0.0) {
+            vec2 screenNext = clipToScreen(clipNext);
+            vec2 outDir = screenNext - screen1;
+            if (length(outDir) > EPSILON) {
+                outDir = normalize(outDir);
+                vec2 outNormal = vec2(-outDir.y, outDir.x);
+                vec2 miterNormal = safeNormalize(lineNormal + outNormal);
+
+                float denom = max(dot(miterNormal, lineNormal), EPSILON);
+                normalScale = 1.0 / denom;
+                finalNormal = miterNormal;
             }
         }
+    } else if (abs(t - 0.0) < EPSILON) { 
+        vec4 clipPrev = transformToClip(next); // 'next' actually holds prev for t==0
+        if (clipPrev.w > 0.0) {
+            vec2 screenPrev = clipToScreen(clipPrev);
+            vec2 inDir = screen0 - screenPrev; // direction INTO the join
+            if (length(inDir) > EPSILON) {
+                inDir = normalize(inDir);
+                vec2 inNormal = vec2(-inDir.y, inDir.x);
+                vec2 miterNormal = safeNormalize(inNormal + lineNormal);
+
+                float denom = max(dot(miterNormal, inNormal), EPSILON);
+                normalScale = 1.0 / denom;
+                finalNormal = miterNormal;
+            }
+        }
+    }
+                if (u_joinType == JOIN_ROUND) {
+                    v_tangent = vec3(finalNormal * side * halfW, 0.0);
+                } else if (u_joinType == JOIN_BEVEL) {
+					normalScale = 1.0;
+				} else {
+                    normalScale = min(normalScale, u_miterLimit);
+                }
+        }
         
-		vec2 offset = finalNormal * (halfWidthNDC * normalScale * side);
-		vec2 finalNDC = currentNDC + offset;
-		gl_Position = vec4(finalNDC * currentW, 0.0, currentW);
-        
-        // Set varyings for fragment shader
-        v_lineUV = vec2(t, side);
+		vec2 offset = finalNormal * (halfW * normalScale * side);
+		vec2 finalScreen = currentScreen + offset;
+		gl_Position = screenToClip(finalScreen, currentW);
         
         return;
     }

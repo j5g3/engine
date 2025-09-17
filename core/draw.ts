@@ -5,7 +5,7 @@ import type { Color, Texture, WebglContext } from './program.js';
 
 export type DrawEngine = ReturnType<typeof drawEngine>;
 
-interface Stroke {
+export interface Stroke {
 	width?: number;
 	color?: Color;
 	cap?: 'butt' | 'round' | 'square';
@@ -81,6 +81,9 @@ export function drawEngine(ctx: WebglContext) {
 		if (ctx.capType.value !== 0) {
 			totalVerts += 12; // 6 vertices for start cap + 6 for end cap
 		}
+		/*f (ctx.joinType.value !== 0 && segCount > 1) {
+			totalVerts += (segCount - 1) * 6;
+		}*/
 
 		// each vertex carries 4 floats for data0 and 4 for data1
 		const buf0 = new Float32Array(totalVerts * 4);
@@ -137,20 +140,53 @@ export function drawEngine(ctx: WebglContext) {
 			const x1 = points[2 * i + 2],
 				y1 = points[2 * i + 3];
 
+			// Previous point P_{i-1}
+			let px, py;
+			if (i > 0) {
+				px = points[2 * i - 2];
+				py = points[2 * i - 1];
+			} else {
+				// Extrapolate for the start of the line to ensure a proper cap
+				px = x0 + (x0 - x1);
+				py = y0 + (y0 - y1);
+			}
+
 			let nx: number, ny: number;
 			if (i < segCount - 1) {
 				nx = points[2 * (i + 2)];
 				ny = points[2 * (i + 2) + 1];
 			} else {
-				nx = 0; // No next segment
-				ny = 0;
+				//nx = 0; // No next segment
+				//ny = 0;
+				nx = x1 + (x1 - x0);
+				ny = y1 + (y1 - y0);
 			}
 
 			for (let k = 0; k < corner.length; k++) {
 				const [t, side] = corner[k] as [number, number];
 
-				addVertex(x0, y0, x1, y1, t, side, nx, ny);
+				// Use the previous point for the start of the segment (t=0)
+				// and the next point for the end of the segment (t=1).
+				const jx = t === 0 ? px : nx;
+				const jy = t === 0 ? py : ny;
+
+				addVertex(x0, y0, x1, y1, t, side, jx, jy);
 			}
+			/*if (i > 0 && i < segCount - 1 && ctx.joinType.value !== 0) {
+				// Outer wedge between prev and next directions
+				// Emit 2 triangles forming a bevel/miter placeholder
+				// Uses t=0 for prev-side verts and t=1 for next-side verts
+
+				// Triangle 1
+				addVertex(x0, y0, x1, y1, 0, +1, px, py); // outer side of prev
+				addVertex(x0, y0, x1, y1, 0, -1, px, py); // inner side of prev
+				addVertex(x0, y0, x1, y1, 1, +1, nx, ny); // outer side of next
+
+				// Triangle 2
+				addVertex(x0, y0, x1, y1, 0, -1, px, py); // inner side of prev
+				addVertex(x0, y0, x1, y1, 1, -1, nx, ny); // inner side of next
+				addVertex(x0, y0, x1, y1, 1, +1, nx, ny); // outer side of next
+			}*/
 		}
 
 		// Add end cap if needed
@@ -166,6 +202,10 @@ export function drawEngine(ctx: WebglContext) {
 			}
 		}
 
+		ctx.position.disable();
+		ctx.normal.disable();
+		ctx.texcoord.disable();
+		ctx.tangent.disable();
 		ctx.data0.enable();
 		ctx.data1.enable();
 		ctx.data0.set({
@@ -188,6 +228,7 @@ export function drawEngine(ctx: WebglContext) {
 
 		if (_strokeColor) ctx.color.pop();
 
+		ctx.position.enable();
 		ctx.data0.disable();
 		ctx.data1.disable();
 	}
@@ -313,19 +354,15 @@ export function drawEngine(ctx: WebglContext) {
 		ctx.position.set({
 			data: verts.buffer,
 			size: 3,
-			usage: WebGL2RenderingContext.STREAM_DRAW,
+			usage: GL.STREAM_DRAW,
 		});
 
-		ctx.draw(fillCount, 0, WebGL2RenderingContext.TRIANGLE_FAN);
+		ctx.draw(fillCount, 0, GL.TRIANGLE_FAN);
 
 		// draw stroke strip if needed
 		if (strokeCount) {
 			if (_strokeColor) ctx.color.push(_strokeColor);
-			ctx.draw(
-				strokeCount,
-				fillCount,
-				WebGL2RenderingContext.TRIANGLE_STRIP,
-			);
+			ctx.draw(strokeCount, fillCount, GL.TRIANGLE_STRIP);
 			if (_strokeColor) ctx.color.pop();
 		}
 
@@ -466,6 +503,8 @@ export function drawEngine(ctx: WebglContext) {
 	ctx.normal.disable();
 	ctx.texcoord.disable();
 	ctx.tangent.disable();
+	ctx.data0.disable();
+	ctx.data1.disable();
 
 	return {
 		color,
