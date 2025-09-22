@@ -1,6 +1,6 @@
-import { identity, multiply, orthographic } from './matrix.js';
+import { identity, multiply, orthographic } from './math.js';
 
-import type { Matrix } from './matrix.js';
+import type { Matrix } from './math.js';
 
 type ArrayBufferTextureOptions = TextureBaseOptions & {
 	src: ArrayBufferView;
@@ -39,6 +39,12 @@ interface TextureBaseOptions {
 	border?: number;
 	format?: GLenum;
 	type?: GLenum;
+}
+
+export enum RenderMode {
+	quad = 0,
+	line = 1,
+	polyline = 2,
 }
 
 const whiteColor: Color = [1, 1, 1, 1] as const;
@@ -206,7 +212,7 @@ export class Program {
 		vtx: string,
 		public readonly canvas: HTMLCanvasElement | OffscreenCanvas,
 	) {
-		const gl = canvas.getContext('webgl2');
+		const gl = canvas.getContext('webgl2', { antialias: false });
 		if (!gl) throw new Error('Could not create webgl2 canvas context');
 		const glProgram = gl.createProgram();
 		if (!glProgram) throw new Error('Could not create WebGL Program');
@@ -251,14 +257,15 @@ export class Program {
 
 	location(name: string) {
 		const location = this.gl.getUniformLocation(this.glProgram, name);
-		if (!location) throw new Error('Invalid uniform location');
+		if (!location) throw new Error(`Invalid uniform "${name}"`);
 		return location;
 	}
 
 	uniformInfo(name: string) {
 		const { gl, glProgram } = this;
 		const location = gl.getUniformLocation(glProgram, name);
-		if (!location) throw new Error('Invalid uniform location');
+		if (!location)
+			throw new Error(`Invalid uniform location for "${name}"`);
 		const index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
 		const type = gl.getActiveUniform(glProgram, index)?.type ?? -1;
 		const method = getUniformMethod(gl, type);
@@ -422,7 +429,8 @@ export class Uniform<T extends UniformType> {
 	) {
 		const { gl, glProgram } = program;
 		const location = gl.getUniformLocation(glProgram, name);
-		if (!location) throw new Error('Invalid uniform location');
+		if (!location)
+			throw new Error(`Invalid uniform location for "${name}"`);
 		this.location = location;
 		this.index = gl.getUniformIndices(glProgram, [name])?.[0] ?? -1;
 		this.type = gl.getActiveUniform(glProgram, this.index)?.type ?? -1;
@@ -446,8 +454,12 @@ export class Uniform<T extends UniformType> {
 	}
 
 	pop() {
-		const M2 = (this.stack ??= []).pop();
-		if (!M2) throw new Error('Uniform stack empty');
+		if (!this.stack || this.stack?.length === 0)
+			throw new Error('Uniform stack empty');
+
+		const M2 = this.stack.pop();
+		if (M2 === undefined) throw new Error('Invalid matrix popped');
+
 		this.set(M2);
 	}
 
@@ -509,6 +521,25 @@ export class UniformTexture {
 	}
 }
 
+export const SHADER_CONSTANTS = `
+const lowp int RENDER_MODE_QUAD = 0;
+const lowp int RENDER_MODE_LINE = 1;
+const lowp int RENDER_MODE_POLYLINE = 2;
+
+const float CAP_BUTT = 0.0;
+const float CAP_SQUARE = 1.0;
+const float CAP_ROUND = 2.0;
+
+const float JOIN_NONE = 0.0;
+const float JOIN_MITER = 1.0;
+const float JOIN_BEVEL = 2.0;
+const float JOIN_ROUND = 3.0;
+
+const float PI = 3.14159265359;
+const float TWO_PI = 6.283185307179586;
+const float EPSILON = 1e-6;
+`;
+
 /**
  * Creates a WebGL 2.0 context with default shaders.
  *
@@ -553,6 +584,12 @@ in vec2 v_texcoord;
 in vec3 v_tangent;  
 in vec2 v_lineUV;
 
+flat in vec2 v_lineStart;
+flat in vec2 v_lineEnd;
+flat in lowp int v_lineSegment;
+flat in vec2 v_lineDir;
+in vec2 v_lineAdj;
+
 uniform sampler2D u_texture;
 uniform sampler2D u_normalTexture;
 uniform sampler2D u_metallicTexture;
@@ -566,11 +603,11 @@ uniform float u_strokeWidth;   // width in pixels
 uniform float u_capType;
 uniform float u_joinType;      // 0=none, 1=miter, 2=bevel, 3=round
 
-uniform lowp int u_renderMode; // 0 = draw, 1 = line, 2 = PBR lit
+uniform lowp int u_renderMode;
 
 out vec4 outColor;
 
-#define PI 3.14159265359
+${SHADER_CONSTANTS}
 
 // Function to transform normal from tangent space to world space
 vec3 getNormalFromMap() {
@@ -634,78 +671,105 @@ vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, v
     return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
 }
 
+float cross2D(vec2 a, vec2 b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+float renderRoundCap(bool isStart, float halfW, float aaWidth) {
+	vec2 d = gl_FragCoord.xy - (isStart ? v_lineStart : v_lineEnd);
+	float proj = dot(d, v_normal.xy);
+	float dist = length(d);
+	return (isStart ? proj < 0.0 : proj >= 0.0)
+		? 1.0 - smoothstep(halfW - aaWidth, halfW, dist)
+		: 1.0;
+}
+
+void renderLine(vec4 albedo, bool oneSegment) {
+	float halfW = u_strokeWidth * 0.5;
+	//float aaWidth = max(fwidth(v_lineUV.y), 1.0);
+	float aaWidth = fwidth(v_lineUV.y) * halfW;
+	float distY = abs(v_lineUV.y) * halfW;
+	float t = v_lineUV.x;
+	
+	float alpha = (distY <= 0.5) ? 1.0 : 1.0 - smoothstep(halfW - aaWidth, halfW, distY);
+
+	// Round caps (separate from joins)
+	if ((v_lineSegment==0 || v_lineSegment==1) && u_capType == CAP_ROUND) {
+		alpha = renderRoundCap(v_lineSegment == 0, halfW, aaWidth);
+	}
+	
+	// Draw the end cap for one segment lines
+	if (t > 0.5 && u_capType == CAP_ROUND && oneSegment) {
+		alpha = renderRoundCap(false, halfW, aaWidth);
+	}
+	
+	// Check for round joins
+	if (!oneSegment && (u_joinType == JOIN_ROUND || u_joinType == JOIN_BEVEL)) {
+		bool isStartJoin = v_lineSegment != 0 && (t < 0.5);
+		bool isEndJoin = v_lineSegment != 1 && (t > (1.0 - 0.5));
+		
+		if (isStartJoin || isEndJoin) {
+			vec2 center, inDir, outDir;
+
+			if (isStartJoin) {
+				center = v_lineStart;
+				inDir = normalize(v_lineStart - v_lineAdj);
+				outDir = v_lineDir;
+			} else {
+				center = v_lineEnd;
+				inDir = v_lineDir;
+				outDir = normalize(v_lineAdj - v_lineEnd);
+			}
+			
+			vec2 toFrag = gl_FragCoord.xy - center;
+			float len = length(toFrag);
+			float distAlongIn = dot(toFrag, inDir);
+			float distAlongOut = dot(toFrag, outDir);
+			
+			if (
+				(distAlongIn > 0.0 && distAlongOut < 0.0) ||
+				(distAlongIn > 0.0 && len > halfW && t>0.5) ||
+				(distAlongOut < 0.0 && len > halfW && t<0.5)
+			) {
+
+				if (u_joinType == JOIN_ROUND) {
+					alpha = 1.0 - smoothstep(halfW-aaWidth, halfW, len);
+				} else {
+					float angleDot = dot(inDir, outDir);
+					vec2 miter = normalize(inDir + outDir);
+					vec2 bevelNormal = vec2(-miter.y, miter.x);
+					float bevelDist = dot(toFrag, bevelNormal);
+					float distToCheck = abs(bevelDist);
+
+					alpha = 1.0 - smoothstep(halfW-aaWidth, halfW, distToCheck);
+				}
+			}
+		}
+	}
+	
+	if (alpha <= 0.0) discard;
+	float finalA = albedo.a * alpha;
+	outColor = vec4(albedo.rgb * finalA, finalA);
+}
+
 void main() {
     vec4 albedo = texture(u_texture, v_texcoord) * u_color;
 	
-    if (u_renderMode == 0) {
+    if (u_renderMode == RENDER_MODE_QUAD) {
         outColor = albedo;
-        return;
 	}
-	// LINE BRANCH 
-	if (u_renderMode == 1) {
-		float halfW    = u_strokeWidth * 0.5;
-		float aaWidth  = max(fwidth(v_lineUV.y) * halfW, 1.0);
-		float pixelDist = abs(v_lineUV.y) * halfW;
-		float alpha = 1.0;
-		if (pixelDist > halfW) {
-			alpha = 1.0 - smoothstep(halfW, halfW + aaWidth, pixelDist);
-		}
-								  
-		if (alpha <= 0.0) discard;
-		
-		bool isJoinVertex = abs(v_lineUV.x - 1.0) < 1e-6;
-		
-		if (isJoinVertex && u_joinType > 0.0) {
-			if (u_joinType == 3.0) { // Round Join
-				float dist = length(v_tangent.xy);
-				alpha = 1.0 - smoothstep(
-					halfW - aaWidth,
-					halfW + aaWidth,
-					dist
-				);
-			}
-		}
-		// Handle line caps
-		else if (v_lineUV.x < 0.0 || v_lineUV.x > 1.0) {
-			if (u_capType == 0.0) {
-				// Butt cap - hard cutoff
-				discard;
-			} else if (u_capType == 1.0) {
-				// Square cap - already handled by vertex shader extension
-				// Just apply the edge antialiasing
-			} else if (u_capType == 2.0) {
-				// Round cap - signed distance field approach
-				float tC = clamp(v_lineUV.x, 0.0, 1.0);
-				vec2 pixelOff = vec2(
-					(v_lineUV.x - tC) * halfW,
-					v_lineUV.y        * halfW
-				);
-				float dist = length(pixelOff);
-				alpha *= 1.0 - smoothstep(
-					halfW - aaWidth,
-					halfW + aaWidth,
-					dist
-				);
-			}
-		}
+	else if (u_renderMode == RENDER_MODE_LINE || u_renderMode == RENDER_MODE_POLYLINE) {
+		renderLine(albedo, u_renderMode == RENDER_MODE_LINE);
+	} else {
+		// Use the proper normal map transformation
+		vec3 normal = getNormalFromMap();
 
-		// Apply alpha and early exit if fully transparent
-		if (alpha <= 0.0) discard;
+		float metallic = texture(u_metallicTexture, v_texcoord).r;
+		float roughness = texture(u_roughnessTexture, v_texcoord).r;
+		float ao = texture(u_aoTexture, v_texcoord).r;
 
-		// Output premultiplied alpha
-		float finalAlpha = albedo.a * alpha;
-		outColor = vec4(albedo.rgb * finalAlpha, finalAlpha);
-		return;
+		outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
 	}
-    
-    // Use the proper normal map transformation
-    vec3 normal = getNormalFromMap();
-    
-    float metallic = texture(u_metallicTexture, v_texcoord).r;
-    float roughness = texture(u_roughnessTexture, v_texcoord).r;
-    float ao = texture(u_aoTexture, v_texcoord).r;
-    
-    outColor = calculateLighting(albedo, metallic, roughness, ao, normal, v_position);
 }
 `,
 		`#version 300 es
@@ -722,7 +786,7 @@ uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat4 u_normalMatrix;
-uniform lowp int u_renderMode; // 0 = draw, 1 = line, 2 = PBR lit
+uniform lowp int u_renderMode;
 uniform vec2 u_resolution;     // viewport resolution for pixel-perfect lines
 
 // Line Uniforms
@@ -737,29 +801,24 @@ out vec2 v_texcoord;
 out vec3 v_tangent;
 out vec2 v_lineUV;
 
-const float CAP_BUTT = 0.0;
-const float CAP_SQUARE = 1.0;
-const float CAP_ROUND = 2.0;
+flat out vec2 v_lineStart;
+flat out vec2 v_lineEnd;
+flat out lowp int v_lineSegment;
+flat out vec2 v_lineDir;
+out vec2 v_lineAdj;
 
-const float JOIN_NONE = 0.0;
-const float JOIN_MITER = 1.0;
-const float JOIN_BEVEL = 2.0;
-const float JOIN_ROUND = 3.0;
-
-const float EPSILON = 1e-6;
+${SHADER_CONSTANTS}
 
 vec2 safeNormalize(vec2 v) {
     float len = length(v);
     return len > EPSILON ? v / len : vec2(0.0, 1.0);
 }
 
-vec4 transformToClip(vec2 worldPos) {
-    return u_projection * u_view * u_model * vec4(worldPos, 0.0, 1.0);
-}
-
-vec2 clipToScreen(vec4 clipPos) {
+vec2 worldToScreen(vec2 worldPos) {
+    vec4 clipPos = u_projection * u_view * u_model * vec4(worldPos, 0.0, 1.0);
     vec2 ndc = clipPos.xy / clipPos.w;
-    return (ndc + 1.0) * 0.5 * u_resolution;
+    vec2 screen = (ndc + 1.0) * 0.5 * u_resolution;
+    return floor(screen)+0.5;
 }
 
 vec4 screenToClip(vec2 screenPos, float w) {
@@ -767,121 +826,110 @@ vec4 screenToClip(vec2 screenPos, float w) {
     return vec4(ndc * w, 0.0, w);
 }
 
-void main() {
-    // Line rendering mode
-    if (u_renderMode == 1) {
-        vec2 p0 = a_data0.xy;
-        vec2 p1 = a_data0.zw;
-        vec2 next = a_data1.zw;
-        
-        float t = a_data1.x;
-        float side = a_data1.y;
+vec2 getLineJoinDirection(vec2 dirAdj, vec2 normal) {
+    float l = length(dirAdj);
+    if (l < EPSILON) return normal;
+    vec2 dirNorm = dirAdj / l;
+    vec2 nAdj = vec2(-dirNorm.y, dirNorm.x);
+    return normalize(normal + nAdj);
+}
 
-        v_lineUV = vec2(t, side);
-        
-        // Transform to clip space
-        vec4 clip0 = transformToClip(p0);
-        vec4 clip1 = transformToClip(p1);
-        
-        // Handle near-clipping plane issues
-        if (clip0.w <= 0.0 && clip1.w <= 0.0) {
-            gl_Position = vec4(0.0, 0.0, -1.0, 1.0);
-            return;
-        }
+float getMiterLength(vec2 bisector, vec2 normal, float halfW) {
+    float dotProd = max(dot(bisector, normal), EPSILON);
+    return halfW / dotProd;
+}
 
-        // To correctly handle aspect ratio, we do calculations in screen space
-        vec2 screen0 = clipToScreen(clip0);
-        vec2 screen1 = clipToScreen(clip1);
-        
-        vec2 lineDir = screen1 - screen0;
-        float lineLength = length(lineDir);
-        
-        if (lineLength < EPSILON) {
-            gl_Position = mix(clip0, clip1, t);
-            return;
-        }
-        
-        lineDir = lineDir / lineLength;
-        vec2 lineNormal = vec2(-lineDir.y, lineDir.x);
-        
-        // Position on the line segment
-        float tc = clamp(t, 0.0, 1.0);
-        vec2 currentScreen = mix(screen0, screen1, tc);
-        float currentW  = mix(clip0.w, clip1.w, tc);
-        
-        float halfW = u_strokeWidth * 0.5;
-        
-		bool isStartCap = t < 0.0;
-        bool isEndCap = t > 1.0;
-		bool isJoinVertex = (abs(t - 1.0) < EPSILON) || (abs(t - 0.0) < EPSILON);
-        
-        if (u_capType != CAP_BUTT && (isStartCap || isEndCap)) {
-			float dir = isStartCap ? -1.0 : 1.0;
-			currentScreen += lineDir * (halfW * dir);
-        }
+void renderLine() {
+    vec2 p0      = a_data0.xy;
+    vec2 p1      = a_data0.zw;
+    float t      = a_data1.x;
+    float side   = a_data1.y;
+	// nextPt contains prev point when t=0 and next point when t=1
+    vec2 nextPt  = a_data1.zw; 
+	
+	bool isStartSeg = t >= 2.0;
+	bool isEndSeg = t < 0.0;
+	
+	t = isStartSeg ? t - 2.0 : isEndSeg ? t + 2.0 : t;
+	
+	bool isStartCap  = t == 0.0 && isStartSeg;
+	bool isEndCap    = t == 1.0 && isEndSeg;
+	bool isStartJoin = t == 0.0 && !isStartSeg;
+	bool isEndJoin = t == 1.0 && !isEndSeg;
+	bool isJoin = u_renderMode != RENDER_MODE_LINE && (isStartJoin || isEndJoin);
+	
+    vec2 screen0 = worldToScreen(p0);
+    vec2 screen1 = worldToScreen(p1);
+    // interpolate along the segment
+    vec2 sc = mix(screen0, screen1, t);
 
-        // Handle line joins
-        vec2 finalNormal = lineNormal;
-        float normalScale = 1.0;
-
-		// - t ~ 1.0 : join at p1, next is the following point (outgoing)
-		// - t ~ 0.0 : join at p0, next contains the previous point (incoming)
-		if (u_joinType > JOIN_NONE && isJoinVertex && length(next) > EPSILON) {
-
-    if (abs(t - 1.0) < EPSILON) {
-        vec4 clipNext = transformToClip(next);
-        if (clipNext.w > 0.0) {
-            vec2 screenNext = clipToScreen(clipNext);
-            vec2 outDir = screenNext - screen1;
-            if (length(outDir) > EPSILON) {
-                outDir = normalize(outDir);
-                vec2 outNormal = vec2(-outDir.y, outDir.x);
-                vec2 miterNormal = safeNormalize(lineNormal + outNormal);
-
-                float denom = max(dot(miterNormal, lineNormal), EPSILON);
-                normalScale = 1.0 / denom;
-                finalNormal = miterNormal;
-            }
-        }
-    } else if (abs(t - 0.0) < EPSILON) { 
-        vec4 clipPrev = transformToClip(next); // 'next' actually holds prev for t==0
-        if (clipPrev.w > 0.0) {
-            vec2 screenPrev = clipToScreen(clipPrev);
-            vec2 inDir = screen0 - screenPrev; // direction INTO the join
-            if (length(inDir) > EPSILON) {
-                inDir = normalize(inDir);
-                vec2 inNormal = vec2(-inDir.y, inDir.x);
-                vec2 miterNormal = safeNormalize(inNormal + lineNormal);
-
-                float denom = max(dot(miterNormal, inNormal), EPSILON);
-                normalScale = 1.0 / denom;
-                finalNormal = miterNormal;
-            }
-        }
-    }
-                if (u_joinType == JOIN_ROUND) {
-                    v_tangent = vec3(finalNormal * side * halfW, 0.0);
-                } else if (u_joinType == JOIN_BEVEL) {
-					normalScale = 1.0;
-				} else {
-                    normalScale = min(normalScale, u_miterLimit);
-                }
-        }
-        
-		vec2 offset = finalNormal * (halfW * normalScale * side);
-		vec2 finalScreen = currentScreen + offset;
-		gl_Position = screenToClip(finalScreen, currentW);
-        
+    // 3) line direction & normal
+    vec2 dir     = screen1 - screen0;
+    float len    = length(dir);
+    if (len < EPSILON) {
+        // degenerate segment → interpolate clip as fallback
+        gl_Position = screenToClip(sc, 1.0);
         return;
     }
-    
-    // Standard mesh rendering
+	
+    vec2 ndir    = normalize(dir);
+    vec2 normal  = vec2(-ndir.y, ndir.x);
+
+    float halfW = u_strokeWidth * 0.5;
+	
+    v_lineUV     = vec2(t, side);
+	v_lineSegment = isStartSeg ? 0 : isEndSeg ? 1 : 2;
+	v_normal = vec3(ndir, 0.0);
+	v_lineStart = screen0;
+	v_lineEnd = screen1;
+	
+    // 6) base offset
+    vec2 offset = normal * (halfW * side);
+	
+	if (u_joinType == JOIN_ROUND || u_joinType == JOIN_BEVEL) {
+		v_lineAdj = worldToScreen(nextPt);
+		v_lineDir = normalize(dir);
+	}
+		
+    if (u_capType != CAP_BUTT && !isJoin) {
+        sc += ndir * (halfW * (t==0.0 ? -1.0 : 1.0));
+    }
+    else if (isJoin && u_joinType != JOIN_NONE) {
+		vec2 screenNext = worldToScreen(nextPt);
+		vec2 dirAdj = (t == 0.0) ? (screen0 - screenNext) : (screenNext - screen1);
+		vec2 bisector = getLineJoinDirection(dirAdj, normal);
+		float miterLen = getMiterLength(bisector, normal, halfW);
+
+		if (miterLen > u_miterLimit * halfW)
+			miterLen = u_miterLimit * halfW;
+
+		offset = bisector * miterLen * side;
+    }
+
+    vec2 finalScreen = sc + offset;
+    gl_Position     = screenToClip(finalScreen, 1.0);
+}
+
+void renderQuad() {
     vec4 worldPosition = u_model * vec4(a_position, 1.0);
     v_position = worldPosition.xyz;
-    v_normal = normalize(mat3(u_normalMatrix) * a_normal);
-    v_tangent = normalize(mat3(u_normalMatrix) * a_tangent);
-    v_texcoord = a_texcoord;
     gl_Position = u_projection * u_view * worldPosition;
+}
+
+void main() {
+	if (u_renderMode == RENDER_MODE_QUAD) { 
+		renderQuad();
+	} else if (u_renderMode == RENDER_MODE_LINE || u_renderMode == RENDER_MODE_POLYLINE) {
+		renderLine();
+	} else {
+		// Standard mesh rendering
+		vec4 worldPosition = u_model * vec4(a_position, 1.0);
+		v_position = worldPosition.xyz;
+		v_normal = normalize(mat3(u_normalMatrix) * a_normal);
+		v_tangent = normalize(mat3(u_normalMatrix) * a_tangent);
+		v_texcoord = a_texcoord;
+		gl_Position = u_projection * u_view * worldPosition;
+	}
 }`,
 		canvas,
 	);
@@ -892,12 +940,15 @@ void main() {
 	gl.clearColor(0, 0, 0, 0);
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	gl.enable(gl.BLEND);
-	gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-	gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+	gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+	gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
 	const indicesBuffer = createBuffer();
-	const resolution = program.uniform('u_resolution', [0, 0]);
+	const resolution = program.uniform('u_resolution', [
+		canvas.width,
+		canvas.height,
+	]);
 
 	return {
 		position: program.attribute(
@@ -925,7 +976,7 @@ void main() {
 		cameraPosition: program.uniform('u_cameraPosition', [0.0, 0.0, 1.0]),
 		resolution,
 
-		capType: program.uniform<number>('u_capType', 1.0),
+		capType: program.uniform<number>('u_capType', 0),
 		joinType: program.uniform<number>('u_joinType', 0),
 		strokeWidth: program.uniform<number>('u_strokeWidth', 1.0),
 		miterLimit: program.uniform<number>('u_miterLimit', 4),
@@ -939,7 +990,7 @@ void main() {
 		normalMatrix: program.uniformMatrix('u_normalMatrix', identity),
 
 		color: program.uniform('u_color', whiteColor),
-		renderMode: program.uniform<number>('u_renderMode', 0),
+		renderMode: program.uniform<RenderMode>('u_renderMode', 0),
 
 		texture: program.uniformTexture(
 			'u_texture',

@@ -1,43 +1,48 @@
-import { Box, composeBox, orthographic, matrix } from './matrix.js';
+import { orthographic, matrix } from './math.js';
 
-import type { Matrix } from './matrix.js';
-import type { Color, Texture, WebglContext } from './program.js';
+import type { Matrix } from './math.js';
+import { RenderMode, Color, Texture, WebglContext } from './program.js';
 
 export type DrawEngine = ReturnType<typeof drawEngine>;
-
-export interface Stroke {
-	width?: number;
-	color?: Color;
-	cap?: 'butt' | 'round' | 'square';
-	join?: 'none' | 'miter' | 'round' | 'bevel';
-}
 
 const GL = WebGL2RenderingContext;
 
 export function drawEngine(ctx: WebglContext) {
-	function color(newColor: Color) {
+	function color(fill: Color, stroke?: Color) {
+		ctx.color.set(fill);
+		if (stroke !== undefined) _strokeColor = stroke;
+	}
+
+	function fillColor(newColor: Color) {
 		ctx.color.set(newColor);
+	}
+
+	function strokeColor(color: Color) {
+		_strokeColor = color;
+	}
+
+	function strokeWidth(width: number) {
+		ctx.strokeWidth.set(width);
+	}
+
+	function strokeCap(cap: 'round' | 'square' | 'butt') {
+		ctx.capType.set(cap === 'round' ? 2 : cap === 'square' ? 1 : 0);
+	}
+
+	function strokeJoin(join: 'none' | 'bevel' | 'round' | 'miter') {
+		ctx.joinType.set(
+			join === 'miter'
+				? 1
+				: join === 'bevel'
+				? 2
+				: join === 'round'
+				? 3
+				: 0,
+		);
 	}
 
 	function texture(newTexture: Texture) {
 		ctx.texture.set(newTexture);
-	}
-
-	function stroke({ width, color, cap, join }: Stroke) {
-		if (width !== undefined) _strokeWidth = width;
-		if (color) _strokeColor = color;
-		if (cap)
-			ctx.capType.set(cap === 'round' ? 2 : cap === 'square' ? 1 : 0);
-		if (join)
-			ctx.joinType.set(
-				join === 'miter'
-					? 1
-					: join === 'bevel'
-					? 2
-					: join === 'round'
-					? 3
-					: 0,
-			);
 	}
 
 	function pushDraw(m: Matrix) {
@@ -53,20 +58,7 @@ export function drawEngine(ctx: WebglContext) {
 	}
 
 	function line(x0: number, y0: number, x1: number, y1: number) {
-		//polyline([x0, y0, x1, y1]);
-		const d = Math.hypot(x1 - x0, y1 - y0);
-		const a = Math.atan2(y1 - y0, x1 - x0);
-		const h = _strokeWidth * unitY;
-
-		LINE_BOX.x = x0;
-		LINE_BOX.y = y0;
-		LINE_BOX.w = d;
-		LINE_BOX.h = h;
-		LINE_BOX.cy = h / 2;
-		LINE_BOX.rotation = a;
-
-		composeBox(LINE_BOX, LINE_M);
-		pushDraw(LINE_M);
+		polyline([x0, y0, x1, y1]);
 	}
 
 	function polyline(points: ArrayLike<number>) {
@@ -77,40 +69,11 @@ export function drawEngine(ctx: WebglContext) {
 		const segCount = nPoints - 1;
 		let totalVerts = segCount * 6;
 
-		// Add cap vertices if needed (for round caps, you'd need more)
-		if (ctx.capType.value !== 0) {
-			totalVerts += 12; // 6 vertices for start cap + 6 for end cap
-		}
-		/*f (ctx.joinType.value !== 0 && segCount > 1) {
-			totalVerts += (segCount - 1) * 6;
-		}*/
-
 		// each vertex carries 4 floats for data0 and 4 for data1
 		const buf0 = new Float32Array(totalVerts * 4);
 		const buf1 = new Float32Array(totalVerts * 4);
 		let o0 = 0,
 			o1 = 0;
-
-		// Helper function to add vertices
-		function addVertex(
-			x0: number,
-			y0: number,
-			x1: number,
-			y1: number,
-			t: number,
-			side: number,
-			nx: number,
-			ny: number,
-		) {
-			buf0[o0++] = x0;
-			buf0[o0++] = y0;
-			buf0[o0++] = x1;
-			buf0[o0++] = y1;
-			buf1[o1++] = t;
-			buf1[o1++] = side;
-			buf1[o1++] = nx;
-			buf1[o1++] = ny;
-		}
 
 		const corner = [
 			[0, 1],
@@ -121,84 +84,41 @@ export function drawEngine(ctx: WebglContext) {
 			[0, -1],
 		];
 
-		// Add start cap if needed
-		if (ctx.capType.value !== 0) {
-			const x0 = points[0],
-				y0 = points[1];
-			const x1 = points[2],
-				y1 = points[3];
-			for (let k = 0; k < corner.length; k++) {
-				const [t, side] = corner[k] as [number, number];
-				// Use negative t values for start cap
-				addVertex(x0, y0, x1, y1, t - 1, side, 0, 0);
-			}
-		}
-
 		for (let i = 0; i < segCount; i++) {
 			const x0 = points[2 * i],
 				y0 = points[2 * i + 1];
 			const x1 = points[2 * i + 2],
 				y1 = points[2 * i + 3];
 
-			// Previous point P_{i-1}
-			let px, py;
-			if (i > 0) {
-				px = points[2 * i - 2];
-				py = points[2 * i - 1];
-			} else {
-				// Extrapolate for the start of the line to ensure a proper cap
-				px = x0 + (x0 - x1);
-				py = y0 + (y0 - y1);
-			}
-
-			let nx: number, ny: number;
-			if (i < segCount - 1) {
-				nx = points[2 * (i + 2)];
-				ny = points[2 * (i + 2) + 1];
-			} else {
-				//nx = 0; // No next segment
-				//ny = 0;
-				nx = x1 + (x1 - x0);
-				ny = y1 + (y1 - y0);
-			}
+			// Determine previous and next points
+			let px = points[2 * i - 2];
+			let py = points[2 * i - 1];
+			let nx = points[2 * (i + 2)];
+			let ny = points[2 * (i + 2) + 1];
 
 			for (let k = 0; k < corner.length; k++) {
 				const [t, side] = corner[k] as [number, number];
 
-				// Use the previous point for the start of the segment (t=0)
-				// and the next point for the end of the segment (t=1).
-				const jx = t === 0 ? px : nx;
-				const jy = t === 0 ? py : ny;
+				buf0[o0++] = x0;
+				buf0[o0++] = y0;
+				buf0[o0++] = x1;
+				buf0[o0++] = y1;
 
-				addVertex(x0, y0, x1, y1, t, side, jx, jy);
-			}
-			/*if (i > 0 && i < segCount - 1 && ctx.joinType.value !== 0) {
-				// Outer wedge between prev and next directions
-				// Emit 2 triangles forming a bevel/miter placeholder
-				// Uses t=0 for prev-side verts and t=1 for next-side verts
-
-				// Triangle 1
-				addVertex(x0, y0, x1, y1, 0, +1, px, py); // outer side of prev
-				addVertex(x0, y0, x1, y1, 0, -1, px, py); // inner side of prev
-				addVertex(x0, y0, x1, y1, 1, +1, nx, ny); // outer side of next
-
-				// Triangle 2
-				addVertex(x0, y0, x1, y1, 0, -1, px, py); // inner side of prev
-				addVertex(x0, y0, x1, y1, 1, -1, nx, ny); // inner side of next
-				addVertex(x0, y0, x1, y1, 1, +1, nx, ny); // outer side of next
-			}*/
-		}
-
-		// Add end cap if needed
-		if (ctx.capType.value !== 0) {
-			const x0 = points[points.length - 4],
-				y0 = points[points.length - 3];
-			const x1 = points[points.length - 2],
-				y1 = points[points.length - 1];
-			for (let k = 0; k < corner.length; k++) {
-				const [t, side] = corner[k] as [number, number];
-				// Use t values > 1 for end cap
-				addVertex(x0, y0, x1, y1, t + 1, side, 0, 0);
+				// This value represents the line's t parameter: 0 at the segment start, 1 at the end.
+				// It also signals whether to apply a start cap or end cap on the line.
+				buf1[o1++] = i === 0 ? t + 2 : i === segCount - 1 ? t - 2 : t;
+				// Side of the line from -1 to 1
+				buf1[o1++] = side;
+				if (i === 0 && t === 0) {
+					buf1[o1++] = nx; //x0 - (x1 - x0);
+					buf1[o1++] = ny; //y0 - (y1 - y0);
+				} else if (i === segCount - 1 && t === 1) {
+					buf1[o1++] = px; //x1 + (x1 - x0);
+					buf1[o1++] = py; //y1 + (y1 - y0);
+				} else {
+					buf1[o1++] = t === 0 ? px : nx;
+					buf1[o1++] = t === 0 ? py : ny;
+				}
 			}
 		}
 
@@ -220,57 +140,34 @@ export function drawEngine(ctx: WebglContext) {
 		});
 
 		// switch into the line‐drawing shader path
-		ctx.renderMode.set(1);
-		ctx.strokeWidth.set(_strokeWidth);
+		ctx.renderMode.push(nPoints > 2 ? 2 : 1);
 		if (_strokeColor) ctx.color.push(_strokeColor);
 
 		ctx.draw(totalVerts, 0, GL.TRIANGLES);
 
 		if (_strokeColor) ctx.color.pop();
 
+		ctx.renderMode.pop();
 		ctx.position.enable();
 		ctx.data0.disable();
 		ctx.data1.disable();
 	}
 
 	function rect(x: number, y: number, w: number, h: number) {
-		if (w < 0) {
-			x = x + w;
-			w = -w;
-		}
-		if (h < 0) {
-			y = y + h;
-			h = -h;
-		}
+		ctx.renderMode.set(RenderMode.quad);
 		scaleM(RECT_M, x, y, w, h);
-		const nw = RECT_M[0];
-		const nh = RECT_M[5];
-		const nx = RECT_M[12];
-		const ny = RECT_M[13];
-		RECT_M[5] = unitY;
 		pushDraw(RECT_M);
 
-		RECT_M[13] = ny + nh - unitY;
-		pushDraw(RECT_M);
-
-		RECT_M[0] = unitX;
-		RECT_M[5] = unitY - nh;
-		pushDraw(RECT_M);
-
-		RECT_M[12] = nx + nw - unitX;
-		pushDraw(RECT_M);
+		if (ctx.strokeWidth.value > 0) {
+			polyline([x, y, x + w, y, x + w, y + h, x, y + h, x, y]);
+		}
 	}
 
 	function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
-		m[0] = w; // * viewScaleX;
-		m[5] = h; // * viewScaleY;
-		m[12] = x; //(x - viewMinX) * viewScaleX;
-		m[13] = y; //(y - viewMinY) * viewScaleY;
-	}
-
-	function fillRect(x: number, y: number, w: number, h: number) {
-		scaleM(RECT_M, x, y, w, h);
-		pushDraw(RECT_M);
+		m[0] = w;
+		m[5] = h;
+		m[12] = x;
+		m[13] = y;
 	}
 
 	function arc(
@@ -308,15 +205,16 @@ export function drawEngine(ctx: WebglContext) {
 		const ndcRy = ry; // * viewScaleY;
 
 		// stroke half‐sizes
-		const halfStrokeX = (_strokeWidth * unitX) / 2;
-		const halfStrokeY = (_strokeWidth * unitY) / 2;
+		const strokeW = ctx.strokeWidth.value;
+		const halfStrokeX = (strokeW * unitX) / 2;
+		const halfStrokeY = (strokeW * unitY) / 2;
 		const outerRx = ndcRx + halfStrokeX;
 		const outerRy = ndcRy + halfStrokeY;
 		const innerRx = Math.max(0, ndcRx - halfStrokeX);
 		const innerRy = Math.max(0, ndcRy - halfStrokeY);
 
 		const fillCount = segments + 2; // center + segments + duplicate first
-		const strokeCount = _strokeWidth > 0 ? (segments + 1) * 2 : 0;
+		const strokeCount = strokeW > 0 ? (segments + 1) * 2 : 0;
 		const verts = new Float32Array((fillCount + strokeCount) * 3);
 		let o = 0;
 
@@ -455,50 +353,47 @@ export function drawEngine(ctx: WebglContext) {
 	 * Updates internal parameters to map logical coordinates into normalized device coordinates,
 	 * allowing rendering to be confined within the specified subregion of the canvas.
 	 */
-	function window(x: number, y: number, x2: number, y2: number) {
+	function viewport(x: number, y: number, x2: number, y2: number) {
 		const w = x2 - x;
 		const h = y2 - y;
-		//windowM = orthographic(x, x2, y, y2, -1, 1);
-		windowM = orthographic(x, x2, y, y2, -1, 1);
-		ctx.projection.set(windowM);
+		ctx.projection.set(orthographic(x, x2, y, y2, -1, 1));
 
-		activeWindow.x = x;
-		activeWindow.y = y;
-		activeWindow.x2 = x2;
-		activeWindow.y2 = y2;
+		activeViewport.x = x;
+		activeViewport.y = y;
+		activeViewport.x2 = x2;
+		activeViewport.y2 = y2;
 
 		PIXEL_M[0] = unitX = w / ctx.canvas.width;
 		PIXEL_M[5] = unitY = h / ctx.canvas.height;
 
 		// how many pixels per world‐unit
-		activeWindow.pw = unitX;
-		activeWindow.ph = unitY;
-
-		LINE_BOX.h = unitY;
-		LINE_BOX.cx = unitX * 0.5;
+		activeViewport.pw = unitX;
+		activeViewport.ph = unitY;
 	}
 
-	function resetWindow() {
-		window(0, 0, ctx.canvas.width, ctx.canvas.height);
+	function resetViewport() {
+		viewport(0, 0, ctx.canvas.width, ctx.canvas.height);
+	}
+
+	function reset() {
+		resetViewport();
+		ctx.strokeWidth.set(1);
+		_strokeColor = undefined;
 	}
 
 	const PIXEL_M = matrix();
-	const LINE_M = matrix();
 	const RECT_M = matrix();
-	const LINE_BOX = Box();
 	const whiteTexture = ctx.createColorTexture([1, 1, 1, 1]);
-	const activeWindow = { x: 0, y: 0, x2: 0, y2: 0, pw: 0, ph: 0 };
+	const activeViewport = { x: 0, y: 0, x2: 0, y2: 0, pw: 0, ph: 0 };
 	const TWOPI = Math.PI * 2;
 
-	let windowM: Matrix;
 	// width and height of 1 pixel
 	let unitX = 1,
 		unitY = 1;
-	let _strokeWidth = 1,
-		_strokeColor: Color | undefined;
+	let _strokeColor: Color | undefined;
 
 	texture(whiteTexture);
-	resetWindow();
+	resetViewport();
 
 	ctx.normal.disable();
 	ctx.texcoord.disable();
@@ -508,18 +403,22 @@ export function drawEngine(ctx: WebglContext) {
 
 	return {
 		color,
+		fillColor,
+		strokeCap,
+		strokeColor,
+		strokeWidth,
+		strokeJoin,
 		putpixel,
 		texture,
 		line,
 		polyline,
 		rect,
-		fillRect,
 		arc,
 		circle,
-		window,
-		resetWindow,
-		stroke,
-		activeWindow,
+		viewport,
+		resetViewport,
+		activeViewport,
 		ellipse,
+		reset,
 	};
 }

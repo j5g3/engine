@@ -3,5 +3,5 @@
 	"compilerOptions": {
 		"outDir": "../dist/core"
 	},
-	"files": ["index.ts", "matrix.ts", "program.ts", "engine.ts", "draw.ts"]
+	"files": ["index.ts", "math.ts", "program.ts", "engine.ts", "draw.ts"]
 }

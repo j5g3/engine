@@ -1,4 +1,4 @@
-import { Box, composeBox } from './matrix.js';
+import { Box, composeBox } from './math.js';
 import { webgl2 } from './program.js';
 
 import type { Color, Texture, TextureOptions } from './program.js';

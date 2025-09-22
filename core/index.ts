@@ -1,4 +1,4 @@
-export * from './matrix.js';
+export * from './math.js';
 export * from './engine.js';
 export * from './program.js';
 export * from './draw.js';

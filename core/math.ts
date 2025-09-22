@@ -181,3 +181,30 @@ export function intersect(a: Rect, b: Rect) {
 		a.y >= b.y + b.h
 	);
 }
+
+/**
+ * Returns a vector perpendicular to the vector from (a, b) to (c, d), without normalizing it.
+ */
+export function perpendicular(
+	a: number,
+	b: number,
+	c: number,
+	d: number,
+): [number, number] {
+	return [-(d - b), c - a];
+}
+
+export function normalize(vec: [number, number] | Float32Array) {
+	const length = Math.sqrt(vec[0] ** 2 + vec[1] ** 2);
+	vec[0] = length ? vec[0] / length : 0;
+	vec[1] = length ? vec[1] / length : 0;
+	return vec;
+}
+
+/**
+ * Calculates the unit normal vector perpendicular to the line segment defined by points (x1, y1) and (x2, y2).
+ * This normal vector is useful for determining directions orthogonal to edges, often used in geometry computations or rendering.
+ */
+export function normal(x1: number, y1: number, x2: number, y2: number) {
+	return normalize(perpendicular(x1, y1, x2, y2));
+}
