@@ -145,7 +145,7 @@ export async function createRenderPipeline(
 							shaderLocation: 1,
 							offset: 3 * 4,
 							format: 'float32x2',
-						}, // texcoord
+						},
 					],
 				},
 			],
