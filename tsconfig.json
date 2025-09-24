@@ -12,8 +12,8 @@
 		"noUnusedParameters": true,
 		"composite": true,
 		"skipLibCheck": true,
-		"typeRoots": [],
-		"types": []
+		"typeRoots": ["./node_modules"],
+		"types": ["@webgpu/types"]
 	},
 	"files": []
 }

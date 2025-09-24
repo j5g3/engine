@@ -52,7 +52,6 @@ export default {
 	box: { w: canvas.width, h: canvas.height },
 	texture: {
 		src: map,
-		magFilter: WebGL2RenderingContext.NEAREST,
 		width: cols,
 		height: rows,
 	},

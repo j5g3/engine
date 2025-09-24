@@ -212,7 +212,7 @@ export class Program {
 		vtx: string,
 		public readonly canvas: HTMLCanvasElement | OffscreenCanvas,
 	) {
-		const gl = canvas.getContext('webgl2', { antialias: false });
+		const gl = canvas.getContext('webgl2');
 		if (!gl) throw new Error('Could not create webgl2 canvas context');
 		const glProgram = gl.createProgram();
 		if (!glProgram) throw new Error('Could not create WebGL Program');
@@ -602,6 +602,7 @@ uniform vec4 u_color;
 uniform float u_strokeWidth;   // width in pixels
 uniform float u_capType;
 uniform float u_joinType;      // 0=none, 1=miter, 2=bevel, 3=round
+uniform float u_miterLimit;    // miter limit for sharp angles
 
 uniform lowp int u_renderMode;
 
@@ -671,10 +672,6 @@ vec4 calculateLighting(vec4 albedo, float metallic, float roughness, float ao, v
     return vec4(ambient.rgb + radiance * (diffuse + finalSpecular), albedo.a);
 }
 
-float cross2D(vec2 a, vec2 b) {
-    return a.x * b.y - a.y * b.x;
-}
-
 float renderRoundCap(bool isStart, float halfW, float aaWidth) {
 	vec2 d = gl_FragCoord.xy - (isStart ? v_lineStart : v_lineEnd);
 	float proj = dot(d, v_normal.xy);
@@ -686,27 +683,26 @@ float renderRoundCap(bool isStart, float halfW, float aaWidth) {
 
 void renderLine(vec4 albedo, bool oneSegment) {
 	float halfW = u_strokeWidth * 0.5;
-	//float aaWidth = max(fwidth(v_lineUV.y), 1.0);
 	float aaWidth = fwidth(v_lineUV.y) * halfW;
 	float distY = abs(v_lineUV.y) * halfW;
 	float t = v_lineUV.x;
 	
 	float alpha = (distY <= 0.5) ? 1.0 : 1.0 - smoothstep(halfW - aaWidth, halfW, distY);
-
-	// Round caps (separate from joins)
-	if ((v_lineSegment==0 || v_lineSegment==1) && u_capType == CAP_ROUND) {
+	
+    // Round caps for start or end segments
+	if (
+		(v_lineSegment==0 || v_lineSegment==1) && 
+		u_capType == CAP_ROUND 
+	) {
 		alpha = renderRoundCap(v_lineSegment == 0, halfW, aaWidth);
-	}
-	
-	// Draw the end cap for one segment lines
-	if (t > 0.5 && u_capType == CAP_ROUND && oneSegment) {
-		alpha = renderRoundCap(false, halfW, aaWidth);
-	}
-	
-	// Check for round joins
-	if (!oneSegment && (u_joinType == JOIN_ROUND || u_joinType == JOIN_BEVEL)) {
+		
+		// Additional end cap for single segments
+		if (t > 0.5 && u_capType == CAP_ROUND && oneSegment) {
+			alpha = renderRoundCap(false, halfW, aaWidth);
+		}
+	} else if (!oneSegment && (u_joinType != JOIN_NONE)) {
 		bool isStartJoin = v_lineSegment != 0 && (t < 0.5);
-		bool isEndJoin = v_lineSegment != 1 && (t > (1.0 - 0.5));
+		bool isEndJoin = v_lineSegment != 1 && (t > 0.5);
 		
 		if (isStartJoin || isEndJoin) {
 			vec2 center, inDir, outDir;
@@ -726,12 +722,24 @@ void renderLine(vec4 albedo, bool oneSegment) {
 			float distAlongIn = dot(toFrag, inDir);
 			float distAlongOut = dot(toFrag, outDir);
 			
+			/*if (u_joinType == JOIN_MITER && t>0.5) {
+				// we need to extend the center point by u_miterLimit in the opposite direction of outDir ,
+				// then we add halfW to calculate the line upper vertex, and discard pixels that are above.
+				vec2 outDir = normalize(v_lineEnd - v_lineAdj);
+				float x = toFrag.x / outDir.x  + u_miterLimit*halfW;
+				vec2 point = center + x * -outDir;
+				
+				if (gl_FragCoord.y > point.y) {
+					outColor = vec4(1.0, 0.0, 0.0, 1.0);
+					return;
+				}
+			}*/ 
+				
 			if (
 				(distAlongIn > 0.0 && distAlongOut < 0.0) ||
 				(distAlongIn > 0.0 && len > halfW && t>0.5) ||
 				(distAlongOut < 0.0 && len > halfW && t<0.5)
 			) {
-
 				if (u_joinType == JOIN_ROUND) {
 					alpha = 1.0 - smoothstep(halfW-aaWidth, halfW, len);
 				} else {
@@ -835,7 +843,7 @@ vec2 getLineJoinDirection(vec2 dirAdj, vec2 normal) {
 }
 
 float getMiterLength(vec2 bisector, vec2 normal, float halfW) {
-    float dotProd = max(dot(bisector, normal), EPSILON);
+    float dotProd = dot(bisector, normal);
     return halfW / dotProd;
 }
 
@@ -860,18 +868,10 @@ void renderLine() {
 	
     vec2 screen0 = worldToScreen(p0);
     vec2 screen1 = worldToScreen(p1);
-    // interpolate along the segment
+	
     vec2 sc = mix(screen0, screen1, t);
-
-    // 3) line direction & normal
     vec2 dir     = screen1 - screen0;
     float len    = length(dir);
-    if (len < EPSILON) {
-        // degenerate segment → interpolate clip as fallback
-        gl_Position = screenToClip(sc, 1.0);
-        return;
-    }
-	
     vec2 ndir    = normalize(dir);
     vec2 normal  = vec2(-ndir.y, ndir.x);
 
@@ -882,13 +882,13 @@ void renderLine() {
 	v_normal = vec3(ndir, 0.0);
 	v_lineStart = screen0;
 	v_lineEnd = screen1;
+	v_lineDir = ndir;
 	
     // 6) base offset
     vec2 offset = normal * (halfW * side);
 	
 	if (u_joinType == JOIN_ROUND || u_joinType == JOIN_BEVEL) {
 		v_lineAdj = worldToScreen(nextPt);
-		v_lineDir = normalize(dir);
 	}
 		
     if (u_capType != CAP_BUTT && !isJoin) {
@@ -900,19 +900,23 @@ void renderLine() {
 		vec2 bisector = getLineJoinDirection(dirAdj, normal);
 		float miterLen = getMiterLength(bisector, normal, halfW);
 
-		if (miterLen > u_miterLimit * halfW)
-			miterLen = u_miterLimit * halfW;
-
-		offset = bisector * miterLen * side;
+		if (u_joinType == JOIN_ROUND)
+			sc += ndir * halfW *  (t==0.0 ? -1.0 : 1.0);
+		else if (isnan(miterLen - miterLen) || miterLen > u_miterLimit * halfW) {
+			if (u_joinType== JOIN_BEVEL && t==1.0)
+				sc += ndir * halfW *  (t==0.0 ? -1.0 : 1.0);
+			else
+				offset = bisector * (u_miterLimit * halfW) * side;
+		} else 
+			offset = bisector * miterLen * side;
     }
 
-    vec2 finalScreen = sc + offset;
-    gl_Position     = screenToClip(finalScreen, 1.0);
+    gl_Position = screenToClip(sc + offset, 1.0);
 }
 
 void renderQuad() {
     vec4 worldPosition = u_model * vec4(a_position, 1.0);
-    v_position = worldPosition.xyz;
+	v_texcoord = a_texcoord;
     gl_Position = u_projection * u_view * worldPosition;
 }
 

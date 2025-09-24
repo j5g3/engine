@@ -33,6 +33,7 @@ async function onChange() {
 		: (await import(`./${fn}`)).default;
 
 	history.pushState(undefined, '', `?${fn}`);
+	console.log(demo);
 
 	ng.reset();
 	draw.reset();

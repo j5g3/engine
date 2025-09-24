@@ -1,6 +1,8 @@
 import type { DrawNode } from './index.js';
 import { normal } from '../core/index.js';
 
+let angle = 0;
+
 export default {
 	draw({ strokeCap, strokeJoin, strokeWidth, strokeColor, polyline, line }) {
 		function drawPolyline(points: number[]) {
@@ -28,8 +30,8 @@ export default {
 				line(
 					points[i],
 					points[i + 1],
-					nx * 20 + points[i],
-					ny * 20 + points[i + 1],
+					nx * 10 + points[i],
+					ny * 10 + points[i + 1],
 				);
 
 				strokeColor([0.5, 0.5, 1.0, 1.0]);
@@ -48,8 +50,8 @@ export default {
 				const ny1 = bx / lengthB;
 				const nx2 = -cy / lengthC;
 				const ny2 = cx / lengthC;
-				const bisectorX = (nx1 + nx2) * 20 + points[i + 2];
-				const bisectorY = (ny1 + ny2) * 20 + points[i + 3];
+				const bisectorX = (nx1 + nx2) * 10 + points[i + 2];
+				const bisectorY = (ny1 + ny2) * 10 + points[i + 3];
 				line(points[i + 2], points[i + 3], bisectorX, bisectorY);
 
 				// draw line adjacent direction vector
@@ -155,6 +157,8 @@ export default {
 		strokeJoin('round');
 		drawPolyline([900, 300, 1000, 300, 1000 - 94, 300 + 14]);
 
+		drawPolyline([900, 400, 1000, 400, 1000 - 94, 400]);
+
 		// Reversed angle Edge Cases translated 150px to the right
 		strokeJoin('bevel');
 		drawPolyline([1250, 200, 1150, 200, 1150 + 94, 200 + 34]);
@@ -164,5 +168,46 @@ export default {
 
 		strokeJoin('round');
 		drawPolyline([1250, 300, 1150, 300, 1150 + 94, 300 + 14]);
+
+		drawPolyline([1250, 400, 1150, 400, 1150 + 94, 400]);
+
+		// Rotating Lines by angle
+		strokeJoin('round');
+		strokeCap('round');
+		drawPolyline([
+			820,
+			600,
+			920,
+			600,
+			920 + Math.cos(angle) * 100,
+			600 + Math.sin(angle) * 100,
+		]);
+
+		strokeJoin('miter');
+		strokeCap('butt');
+		drawPolyline([
+			600,
+			600,
+			700,
+			600,
+			700 + Math.cos(angle) * 100,
+			600 + Math.sin(angle) * 100,
+		]);
+
+		strokeJoin('bevel');
+		drawPolyline([
+			1040,
+			600,
+			1140,
+			600,
+			1140 + Math.cos(angle) * 100,
+			600 + Math.sin(angle) * 100,
+		]);
+	},
+
+	update(_node, set) {
+		angle += 0.01;
+		if (angle > Math.PI * 2) angle = 0;
+		set('draw');
 	},
 } satisfies DrawNode;

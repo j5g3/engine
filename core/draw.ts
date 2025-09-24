@@ -377,7 +377,8 @@ export function drawEngine(ctx: WebglContext) {
 
 	function reset() {
 		resetViewport();
-		ctx.strokeWidth.set(1);
+		ctx.strokeWidth.reset();
+		ctx.color.reset();
 		_strokeColor = undefined;
 	}
 

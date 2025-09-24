@@ -1,5 +1,5 @@
 import { Box, composeBox } from './math.js';
-import { webgl2 } from './program.js';
+import { RenderMode, webgl2 } from './program.js';
 
 import type { Color, Texture, TextureOptions } from './program.js';
 
@@ -58,8 +58,13 @@ export function engine(p: EngineOptions) {
 	function boxComponent(box: Partial<Box>) {
 		const M = composeBox(Box(box));
 		push(() => {
+			program.position.enable();
+			program.texcoord.enable();
 			program.model.pushMult(M);
+			program.renderMode.set(RenderMode.quad);
 			program.draw();
+			program.texcoord.disable();
+			program.position.disable();
 		});
 	}
 
