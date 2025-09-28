@@ -7,6 +7,6 @@
 	"license": "UNLICENSED",
 	"type": "module",
 	"scripts": {
-		"build": "tsc -b tsconfig.json && cp index.html ../dist/demo"
+		"build": "tsc -b tsconfig.json && cp index.html ../dist/demo && mkdir -p ../docs/demo && cp ../dist/demo/*.js ../dist/demo/*.html ../docs/demo"
 	}
 }
