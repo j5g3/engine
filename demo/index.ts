@@ -1,47 +1,31 @@
-import { DrawEngine, Node, drawEngine, engine } from '../core/index.js';
+import { webgpu } from '../core/pipeline.js';
+import { DrawEngine } from '../core/draw.js';
 
 declare global {
 	const canvas: HTMLCanvasElement;
 }
 
-export interface DrawNode extends Node {
+export interface DrawNode {
 	draw(ng: DrawEngine): void;
 }
 
 const demoSelect = document.getElementById('demo') as HTMLSelectElement;
-const ng = engine({
+const program = await webgpu({
 	canvas: document.getElementById('canvas') as HTMLCanvasElement,
 });
-const draw = drawEngine(ng.program);
-
-ng.plugin({
-	clear() {},
-	set() {},
-	begin(n: DrawNode, push) {
-		if (n.draw) {
-			push(() => n.draw(draw));
-		}
-	},
-});
-
-if (location.search) demoSelect.value = location.search.slice(1);
+const draw = new DrawEngine(program);
+let demo: { draw(ng: DrawEngine): void };
 
 async function onChange() {
 	const fn = demoSelect.value;
-	const demo = fn.endsWith('.json')
+	demo = fn.endsWith('.json')
 		? await fetch(fn).then(r => r.json())
 		: (await import(`./${fn}`)).default;
 
 	history.pushState(undefined, '', `?${fn}`);
-	console.log(demo);
-
-	ng.reset();
-	draw.reset();
-	ng.load(demo);
-	ng.render();
+	demo.draw(draw);
+	program.draw();
 }
-
-document.getElementById('btnRender')!.onclick = () => ng.render();
 
 demoSelect.onchange = onChange;
 onChange();

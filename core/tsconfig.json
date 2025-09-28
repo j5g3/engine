@@ -1,14 +1,8 @@
 {
 	"extends": "../tsconfig.json",
 	"compilerOptions": {
+		"allowArbitraryExtensions": true,
 		"outDir": "../dist/core"
 	},
-	"files": [
-		"index.ts",
-		"math.ts",
-		"program.ts",
-		"engine.ts",
-		"draw.ts",
-		"pipeline.ts"
-	]
+	"files": ["index.ts", "math.ts", "draw.ts", "pipeline.ts"]
 }

@@ -16,7 +16,10 @@ export interface Box extends Rect {
 	cy: number;
 	rotation: number;
 }
-
+/**
+ * Creates a new matrix from an optional number array input.
+ * Returns a copy of the identity matrix if no input is provided.
+ */
 export function matrix(m?: number[]) {
 	return m ? new Float32Array(m) : identity.slice(0);
 }

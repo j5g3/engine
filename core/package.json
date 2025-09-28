@@ -8,7 +8,8 @@
 	"browser": "index.min.js",
 	"type": "module",
 	"scripts": {
-		"build": "tsc -b tsconfig.test.json && esbuild ./index.js --minify --bundle --format=esm --tsconfig=tsconfig.json --platform=browser --define:CXL_DEBUG=false --outfile=../dist/core/index.bundle.js",
+		"build": "./build.sh",
+		"docs": "cxl-docgen --summary --clean -o ../docs/core",
 		"test": "npm run build && cd ../dist/core && cxl-tester --mjs"
 	}
 }

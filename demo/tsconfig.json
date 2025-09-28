@@ -3,6 +3,6 @@
 	"compilerOptions": {
 		"outDir": "../dist/demo"
 	},
-	"include": ["*.ts"],
+	"include": ["index.ts", "rect.ts"],
 	"references": [{ "path": "../core" }]
 }
