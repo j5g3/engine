@@ -20,7 +20,7 @@ async function onChange() {
 	const fn = demoSelect.value;
 	demo = fn.endsWith('.json')
 		? await fetch(fn).then(r => r.json())
-		: (await import(`./${fn}`)).default;
+		: (await import(`./${fn}.js`)).default;
 
 	history.pushState(undefined, '', `?${fn}`);
 	demo.draw(draw);
