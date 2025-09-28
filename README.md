@@ -7,3 +7,5 @@ This repo contains a work-in-progress graphics engine built with TypeScript, lev
 -   Shader-based transformations and texture sampling using WGSL.
 -   Efficient management of GPU buffers and resources.
 -   Designed in TypeScript with strong typing.
+
+Visit the [demo](https://j5g3.github.io/engine/demo/) to see the engine in action.

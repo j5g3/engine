@@ -22,7 +22,9 @@ async function onChange() {
 		? await fetch(fn).then(r => r.json())
 		: (await import(`./${fn}.js`)).default;
 
-	history.pushState(undefined, '', `?${fn}`);
+	try {
+		history.pushState(undefined, '', `?${fn}`);
+	} catch (e) {}
 	demo.draw(draw);
 	program.draw();
 }
