@@ -272,8 +272,6 @@ export class InstanceBuffer {
  */
 export class Program {
 	device;
-	protected context;
-	protected renderPipeline;
 
 	readonly color = new Attribute<Float32Array>(
 		new Float32Array([1, 1, 1, 1]),
@@ -284,6 +282,9 @@ export class Program {
 	readonly whiteTexture;
 
 	readonly canvas;
+
+	protected context;
+	protected renderPipeline;
 
 	#defaultVertexBuffer;
 	#vertexBindGroup;

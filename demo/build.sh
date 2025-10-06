@@ -1,6 +1,6 @@
 set -e
-tsc -b tsconfig.json 
-cp index.html ../dist/demo
+
+cxl-build $@
 
 mkdir -p ../docs/demo 
 cp ../dist/demo/*.js ../dist/demo/*.html ../docs/demo
