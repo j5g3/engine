@@ -29,9 +29,14 @@
 <div id="toolbar">
 	<select id="demo">
 		<option selected>rect</option>
+		<option>clock.json</option>
 	</select>
 </div>
 <div id="stage">
 	<canvas width="1280" height="720" id="canvas"></canvas>
 </div>
-<script type="module" src="index.js"></script>
+<script type="module">
+	const url = new URL(location.href);
+	if (url.searchParams.has('debug')) import('../../dist/demo/index.js');
+	else import('index.js');
+</script>

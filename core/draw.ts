@@ -45,8 +45,9 @@ export class DrawEngine {
 	 */
 	rect = (x: number, y: number, w: number, h: number) => {
 		scaleM(this.#RECT_M, x, y, w, h);
-		this.ctx.model.set(this.#RECT_M);
+		this.ctx.model.pushMultiply(this.#RECT_M);
 		this.ctx.pushInstance();
+		this.ctx.model.pop();
 	};
 
 	/**

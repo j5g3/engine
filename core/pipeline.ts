@@ -1,4 +1,5 @@
-import { identity, multiply } from './math.js';
+import { Matrix, identity, multiply } from './math.js';
+import { TextureAtlas, Texture } from './texture-atlas.js';
 
 export type Color = Float32Array<ArrayBufferLike>;
 
@@ -17,6 +18,7 @@ struct VertexInput {
 	@location(4) modelRow2: vec4f,
 	@location(5) modelRow3: vec4f,
 	@location(6) instanceColor: vec4f,
+	@location(7) textureId: f32,
 };
 
 struct Uniforms {
@@ -27,6 +29,7 @@ struct VertexOutput {
     @builtin(position) position: vec4f,
 	@location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
+	@location(2) @interpolate(flat) textureId: u32,
 };
 
 @group(0) @binding(0)
@@ -46,7 +49,8 @@ fn main(
 	
 	output.position = uniforms.viewProj * model * input.position;
 	output.texcoord = input.texcoord;
-	output.color = input.instanceColor;	
+	output.color = input.instanceColor;
+	output.textureId = u32(input.textureId);
     return output;
 }
 `;
@@ -56,15 +60,28 @@ struct FragmentInput {
     @builtin(position) position: vec4f,
     @location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
+	@location(2) @interpolate(flat) textureId: u32,
+};
+
+struct TextureMeta {
+	uvOffset: vec2f,
+	uvSize: vec2f,
+	layer: f32,
+    _pad0: f32,       // offset 20, size 4
+    _pad1: f32,       // offset 24, size 4
+    _pad2: f32,       // offset 28, size 4	
 };
 
 @group(1) @binding(0) var mySampler: sampler;
-@group(1) @binding(1) var myTexture: texture_2d<f32>;
+@group(1) @binding(1) var textureArray: texture_2d_array<f32>;
+@group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
 @fragment
 fn main(input: FragmentInput) -> @location(0) vec4f {
-    let texture_color: vec4f = textureSample(myTexture, mySampler, input.texcoord);
-    return texture_color * input.color;
+	let tMeta = textureMeta[input.textureId];
+	var uv = tMeta.uvOffset + input.texcoord * tMeta.uvSize;
+	let color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer));
+    return color * input.color;
 }
 	`;
 
@@ -125,7 +142,7 @@ export function createRenderPipeline({
 					stepMode: 'vertex',
 				},
 				{
-					arrayStride: 20 * 4, // 16 floats for model matrix + 4 floats for color
+					arrayStride: 96,
 					attributes: [
 						{ shaderLocation: 2, offset: 0, format: 'float32x4' },
 						{
@@ -148,6 +165,11 @@ export function createRenderPipeline({
 							offset: 16 * 4,
 							format: 'float32x4',
 						}, // color
+						{
+							shaderLocation: 7,
+							offset: 20 * 4,
+							format: 'float32',
+						}, // textureIndex
 					],
 					stepMode: 'instance',
 				},
@@ -200,6 +222,43 @@ export class Attribute<T extends Float32Array> {
 	}
 
 	reset() {
+		this.set(this.initial);
+	}
+}
+
+export class MatrixAttribute {
+	public value: Matrix;
+	public dirty = true;
+
+	#stack: Matrix[];
+
+	constructor(protected initial: Matrix) {
+		this.value = initial;
+		this.#stack = [initial];
+	}
+
+	push(m: Matrix) {
+		this.#stack.push(this.value);
+		this.set(m);
+	}
+
+	pop() {
+		const M2 = this.#stack.pop();
+		if (!M2) throw new Error('Uniform stack empty');
+		this.set(M2);
+	}
+
+	pushMultiply(m: Matrix) {
+		this.push(this.value === identity ? m : multiply(this.value, m));
+	}
+
+	set(newValue: Matrix) {
+		this.value = newValue;
+		this.dirty = true;
+	}
+
+	reset() {
+		this.#stack.length = 0;
 		this.set(this.initial);
 	}
 }
@@ -268,7 +327,7 @@ export class InstanceBuffer {
 /**
  * Encapsulates GPU state and rendering logic, managing shaders, buffers, textures,
  * and uniform data to provide a simple interface for drawing instanced geometry
- * with dynamic transformations and colors while handling resource updates efficiently.
+ * with dynamic transformations and colors.
  */
 export class Program {
 	device;
@@ -276,12 +335,15 @@ export class Program {
 	readonly color = new Attribute<Float32Array>(
 		new Float32Array([1, 1, 1, 1]),
 	);
-	readonly model = new Attribute(identity);
+	readonly model = new MatrixAttribute(identity);
 	readonly view = new Attribute(identity);
 	readonly projection = new Attribute(identity);
 	readonly whiteTexture;
+	readonly textureAtlas: TextureAtlas;
 
 	readonly canvas;
+
+	textureId = 0;
 
 	protected context;
 	protected renderPipeline;
@@ -291,6 +353,7 @@ export class Program {
 	#fragmentBindGroup;
 	#instanceBuffer;
 	#vertexUniformBuffer;
+	#textureSampler;
 
 	constructor({ device, format, context }: WebGpuContext) {
 		this.device = device;
@@ -301,7 +364,7 @@ export class Program {
 			vertexWgsl,
 			fragmentWgsl,
 		});
-		const textureSampler = device.createSampler({
+		this.#textureSampler = device.createSampler({
 			magFilter: 'nearest',
 			minFilter: 'nearest',
 			addressModeU: 'clamp-to-edge',
@@ -309,6 +372,7 @@ export class Program {
 		});
 
 		this.canvas = context.canvas;
+		this.textureAtlas = new TextureAtlas(device);
 		this.#defaultVertexBuffer = this.createBuffer({
 			size: 144,
 			usage: GPUBufferUsage.VERTEX,
@@ -333,20 +397,50 @@ export class Program {
 				},
 			],
 		});
-		this.#fragmentBindGroup = device.createBindGroup({
+		this.#fragmentBindGroup = this.device.createBindGroup({
 			layout: this.renderPipeline.getBindGroupLayout(1),
 			entries: [
-				{
-					binding: 0,
-					resource: textureSampler,
-				},
+				{ binding: 0, resource: this.#textureSampler },
 				{
 					binding: 1,
-					resource: this.whiteTexture.createView(),
+					resource: this.textureAtlas.textureArray.createView({
+						dimension: '2d-array',
+						baseArrayLayer: 0,
+						arrayLayerCount: this.textureAtlas.layerCount,
+					}),
+				},
+				{
+					binding: 2,
+					resource: {
+						buffer: this.textureAtlas.textureMetaBuffer,
+					},
 				},
 			],
 		});
-		this.#instanceBuffer = new InstanceBuffer(this, 20);
+		this.#instanceBuffer = new InstanceBuffer(this, 24);
+	}
+
+	updateTextureBindGroup() {
+		this.#fragmentBindGroup = this.device.createBindGroup({
+			layout: this.renderPipeline.getBindGroupLayout(1),
+			entries: [
+				{ binding: 0, resource: this.#textureSampler },
+				{
+					binding: 1,
+					resource: this.textureAtlas.textureArray.createView({
+						dimension: '2d-array',
+						baseArrayLayer: 0,
+						arrayLayerCount: this.textureAtlas.layerCount,
+					}),
+				},
+				{
+					binding: 2,
+					resource: {
+						buffer: this.textureAtlas.textureMetaBuffer,
+					},
+				},
+			],
+		});
 	}
 
 	/**
@@ -368,7 +462,10 @@ export class Program {
 			);
 		}
 
-		if (this.#instanceBuffer.count === 0) return;
+		if (this.textureAtlas.needsUpdate) {
+			this.textureAtlas.update(commandEncoder);
+			this.updateTextureBindGroup();
+		}
 
 		const textureView = context.getCurrentTexture().createView();
 		const renderPass = commandEncoder.beginRenderPass({
@@ -394,35 +491,35 @@ export class Program {
 	}
 
 	pushInstance() {
-		this.#instanceBuffer.push(this.model.value, this.color.value);
+		this.#instanceBuffer.push(
+			this.model.value,
+			this.color.value,
+			new Float32Array([this.textureId]),
+		);
 	}
 
 	destroy() {
 		this.#defaultVertexBuffer.destroy();
-		this.whiteTexture.destroy();
 		this.#vertexUniformBuffer.destroy();
 		this.#instanceBuffer.buffer.destroy();
 	}
 
 	reset() {
 		this.#instanceBuffer.reset();
+		this.textureAtlas.reset();
+		(this.whiteTexture as Texture) = this.createColorTexture(
+			new Float32Array([1, 1, 1, 1]),
+		);
 		this.color.reset();
 		this.model.reset();
 	}
 
 	createColorTexture(color: Color) {
-		const texture = this.device.createTexture({
-			size: [1, 1, 1],
-			format: 'rgba8unorm',
-			usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+		return this.textureAtlas.add({
+			width: 1,
+			height: 1,
+			data: new Uint8Array(color.map(c => c * 255)).buffer,
 		});
-		this.device.queue.writeTexture(
-			{ texture },
-			new Uint8Array(color.map(c => c * 255)),
-			{ bytesPerRow: 4, rowsPerImage: 1 },
-			{ width: 1, height: 1, depthOrArrayLayers: 1 },
-		);
-		return texture;
 	}
 
 	protected createBuffer({

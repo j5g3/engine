@@ -1,0 +1,77 @@
+{
+	"root": {
+		"children": [
+			{
+				"box": {
+					"x": 0,
+					"y": 0,
+					"w": 640,
+					"h": 480
+				},
+				"fill": [0.5, 0.75, 0, 1]
+			},
+			{
+				"box": {
+					"x": 320,
+					"y": 240,
+					"cx": 10,
+					"cy": 210,
+					"sy": -1,
+					"w": 20,
+					"h": 240,
+					"rotation": 0.5
+				},
+				"texture": {
+					"src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAADwCAMAAAA3grSrAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAAZQTFRFAAAAAAAApWe5zwAAAAJ0Uk5T/wDltzBKAAAAPElEQVR42uzXoRHAIADAwHT/pZEgiutVwEf+Bul5KQgh/ATrH6ypEEII78BaFEII4RVYq56ALhJucAgwAIIjD43QJRo/AAAAAElFTkSuQmCC"
+				}
+			},
+			{
+				"box": {
+					"x": 320,
+					"y": 240,
+					"cx": 10,
+					"cy": 220,
+					"w": 20,
+					"h": 240,
+					"rotation": 0.1
+				},
+				"texture": {
+					"src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAADwCAMAAAA3grSrAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAAZQTFRFAAAAAAAApWe5zwAAAAJ0Uk5T/wDltzBKAAAAPUlEQVR42uzYoQHAIADAsPL/05NDMMMEglTmhDYWtYEFIYSnsF6FEEJ4B9akEEIIr8CaFR7G/ysJfuMjwAA3rg7hWWtNkAAAAABJRU5ErkJggg=="
+				}
+			},
+			{
+				"box": {
+					"x": 320,
+					"y": 240,
+					"cy": 4,
+					"cx": 10,
+					"w": 20,
+					"h": 240,
+					"rotation": 0.7
+				},
+				"texture": {
+					"src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAADwCAMAAAA3grSrAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAAZQTFRF/wAAAAAAQaMSAwAAAAJ0Uk5T/wDltzBKAAAAUklEQVR42uzYMQoAIAxD0fT+lxbEoUJwaEFEfsY3BZqpChMVUAJBEARBEARBEATBv1AzO0pZtdnSy2gr+fKcGDyj3VIT/RQfxEhWwe5vLWUIMABZGRBta6PNxwAAAABJRU5ErkJggg=="
+				}
+			},
+			{
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 640,
+					"h": 1
+				},
+				"fill": [0, 0, 0, 1]
+			},
+			{
+				"box": {
+					"x": 320,
+					"y": 0,
+					"w": 1,
+					"h": 480
+				},
+				"fill": [0, 0, 0, 1]
+			}
+		],
+		"update": "const PI = Math.PI;\n\t\t\t\tconst t = new Date(),\n\t\t\t\t\t_secs = t.getSeconds() + t.getMilliseconds() / 1000,\n\t\t\t\t\t_mins = t.getMinutes() + _secs / 60,\n\t\t\t\t\t_hours = t.getHours() + _mins / 60;\n\t\t\t\tconst { hours, minutes, seconds } = node.children;\n\t\t\t\thours.box.rotation = PI + (PI / 6) * _hours;\n\t\t\t\tminutes.box.rotation = PI + (PI / 30) * _mins;\n\t\t\t\tseconds.box.rotation = PI + (PI / 30) * _secs;\n\t\t\t\thours.box.dirty =\n\t\t\t\t\tminutes.box.dirty =\n\t\t\t\t\tseconds.box.dirty =\n\t\t\t\t\t\ttrue;\n"
+	}
+}

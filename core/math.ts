@@ -28,6 +28,36 @@ export const identity = new Float32Array([
 	1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ]) as Readonly<Matrix>;
 
+export function composeBox(box: Box, dst: Matrix = new Float32Array(16)) {
+	const { x, y, sx, sy, cx, cy, w, h, rotation } = box;
+	dst[2] = dst[3] = dst[6] = dst[7] = dst[8] = dst[9] = dst[11] = dst[14] = 0;
+	dst[10] = dst[15] = 1;
+
+	// Rotate
+	const cos = Math.cos(rotation);
+	const sin = Math.sin(rotation);
+	const halfW = w * 0.5;
+	const halfH = h * 0.5;
+
+	dst[0] = sx * cos;
+	dst[1] = sx * sin;
+	dst[4] = sy * -sin;
+	dst[5] = sy * cos;
+
+	// Scale w and h first
+	dst[0] *= halfW; // Multiply by 0.5 because vertex goes from -1 to 1 (range of 2)
+	dst[1] *= halfW;
+	dst[4] *= halfH;
+	dst[5] *= halfH;
+
+	dst[12] =
+		dst[0] + dst[4] + (dst[0] * -cx) / halfW + (dst[4] * -cy) / halfH + x;
+	dst[13] =
+		dst[1] + dst[5] + (dst[1] * -cx) / halfW + (dst[5] * -cy) / halfH + y;
+
+	return dst;
+}
+
 /**
  * Creates a matrix that transforms a `Box` to a transformation matrix.
  *
@@ -37,7 +67,7 @@ export const identity = new Float32Array([
  * - Scaling: Scales the box by `sx` and `sy` along the x and y axes.
  * - Translation: Translates the box to the position `x`, `y`.
  */
-export function composeBox(box: Box, dst: Matrix = new Float32Array(16)) {
+export function composeBox2(box: Box, dst: Matrix = new Float32Array(16)) {
 	const { x, y, sx, sy, cx, cy, w, h, rotation } = box;
 	dst[2] = dst[3] = dst[6] = dst[7] = dst[8] = dst[9] = dst[11] = dst[14] = 0;
 	dst[10] = dst[15] = 1;
@@ -174,6 +204,15 @@ export function orthographic(
 		(near + far) / (near - far),
 		1,
 	]);
+}
+
+export function contains(a: Rect, b: Rect) {
+	return (
+		a.x >= b.x &&
+		a.y >= b.y &&
+		a.x + a.w <= b.x + b.w &&
+		a.y + a.h <= b.y + b.h
+	);
 }
 
 export function intersect(a: Rect, b: Rect) {

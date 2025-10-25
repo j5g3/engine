@@ -4,5 +4,6 @@
 		"allowArbitraryExtensions": true,
 		"outDir": "../dist/core"
 	},
-	"files": ["index.ts", "math.ts", "draw.ts", "pipeline.ts"]
+	"include": ["*.ts"],
+	"exclude": ["test.ts"]
 }

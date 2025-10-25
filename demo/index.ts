@@ -1,20 +1,17 @@
 import { webgpu } from '../core/pipeline.js';
-import { DrawEngine } from '../core/draw.js';
+import { Engine, EngineJson } from '../core/engine.js';
 
 declare global {
 	const canvas: HTMLCanvasElement;
-}
-
-export interface DrawNode {
-	draw(ng: DrawEngine): void;
 }
 
 const demoSelect = document.getElementById('demo') as HTMLSelectElement;
 const program = await webgpu({
 	canvas: document.getElementById('canvas') as HTMLCanvasElement,
 });
-const draw = new DrawEngine(program);
-let demo: { draw(ng: DrawEngine): void };
+let engine: Engine; // = new Engine(program);
+const url = new URL(location.href);
+let demo: EngineJson;
 
 async function onChange() {
 	const fn = demoSelect.value;
@@ -22,12 +19,22 @@ async function onChange() {
 		? await fetch(fn).then(r => r.json())
 		: (await import(`./${fn}.js`)).default;
 
+	url.searchParams.set('demo', fn);
+
 	try {
-		history.pushState(undefined, '', `?${fn}`);
-	} catch (e) {}
-	demo.draw(draw);
+		history.pushState(undefined, '', url.search);
+	} catch (e) {
+		console.error(e);
+	}
+
+	engine?.reset();
+	engine ??= new Engine(program);
+	await engine.load(demo.root);
 	program.draw();
 }
+
+const initialDemo = url.searchParams.get('demo');
+if (initialDemo) demoSelect.value = initialDemo;
 
 demoSelect.onchange = onChange;
 onChange();
