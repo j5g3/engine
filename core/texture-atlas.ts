@@ -40,10 +40,7 @@ export class TextureAtlas {
 		this.#textureMetaData = new Float32Array(100 * 8);
 		this.textureMetaBuffer = this.device.createBuffer({
 			size: this.#textureMetaData.byteLength,
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_DST |
-				GPUBufferUsage.COPY_SRC,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 		});
 	}
 

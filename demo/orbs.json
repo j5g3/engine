@@ -1,0 +1,131 @@
+{
+	"root": {
+		"children": [
+			{
+				"box": { "x": 0, "y": 0, "w": 1280, "h": 720 },
+				"fill": [0.078, 0.078, 0.157, 1.0]
+			},
+			{
+				"id": "orb0",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.937, 0.325, 0.314, 0.863]
+			},
+			{
+				"id": "orb1",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.925, 0.251, 0.478, 0.863]
+			},
+			{
+				"id": "orb2",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.671, 0.278, 0.737, 0.863]
+			},
+			{
+				"id": "orb3",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.494, 0.341, 0.761, 0.863]
+			},
+			{
+				"id": "orb4",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.361, 0.42, 0.753, 0.863]
+			},
+			{
+				"id": "orb5",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.259, 0.647, 0.961, 0.863]
+			},
+			{
+				"id": "orb6",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.161, 0.714, 0.965, 0.863]
+			},
+			{
+				"id": "orb7",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.149, 0.776, 0.855, 0.863]
+			},
+			{
+				"id": "orb8",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [0.4, 0.733, 0.416, 0.863]
+			},
+			{
+				"id": "orb9",
+				"box": {
+					"x": 0,
+					"y": 240,
+					"w": 40,
+					"h": 40,
+					"cx": 20,
+					"cy": 20
+				},
+				"fill": [1.0, 0.792, 0.157, 0.863]
+			}
+		],
+		"update": "const time = performance.now() / 1000;\n\t\t\t\tconst numOrbs = 10;\n\t\t\t\tconst amplitude = 160;\n\t\t\t\tconst yCenter = 240;\n\t\t\t\tconst spacing = 640 / (numOrbs + 1);\n\n\t\t\t\tfor (let i = 0; i < numOrbs; i++) {\n\t\t\t\t\tconst orb = get('orb' + i);\n\t\t\t\t\tconst phase = i * 0.5;\n\t\t\t\t\tconst sinVal = Math.sin(time * 3 + phase);\n\n\t\t\t\t\torb.box.x = spacing * (i + 1);\n\t\t\t\t\torb.box.y = yCenter + sinVal * amplitude;\n\t\t\t\t\torb.box.rotation = sinVal * 2;\n\t\t\t\t\torb.box.dirty = true;\n\t\t\t\t}"
+	}
+}

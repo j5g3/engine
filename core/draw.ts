@@ -8,10 +8,10 @@ import type { Color, Program } from './pipeline.js';
  * by adjusting scale factors and translation components to fit within the given coordinates.
  */
 function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
-	m[0] = w / 2;
-	m[5] = h / 2;
-	m[12] = x + w / 2;
-	m[13] = y + h / 2;
+	m[0] = w;
+	m[5] = h;
+	m[12] = x;
+	m[13] = y;
 }
 
 /**
@@ -46,7 +46,7 @@ export class DrawEngine {
 	rect = (x: number, y: number, w: number, h: number) => {
 		scaleM(this.#RECT_M, x, y, w, h);
 		this.ctx.model.pushMultiply(this.#RECT_M);
-		this.ctx.pushInstance();
+		this.ctx.pushInstance(1, 1);
 		this.ctx.model.pop();
 	};
 

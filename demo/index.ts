@@ -30,7 +30,7 @@ async function onChange() {
 	engine?.reset();
 	engine ??= new Engine(program);
 	await engine.load(demo.root);
-	program.draw();
+	engine.requestRender();
 }
 
 const initialDemo = url.searchParams.get('demo');

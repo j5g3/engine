@@ -19,6 +19,8 @@ struct VertexInput {
 	@location(5) modelRow3: vec4f,
 	@location(6) instanceColor: vec4f,
 	@location(7) textureId: f32,
+	@location(8) width: f32,
+	@location(9) height: f32,
 };
 
 struct Uniforms {
@@ -47,7 +49,11 @@ fn main(
 		input.modelRow3,
 	);
 	
-	output.position = uniforms.viewProj * model * input.position;
+	let scale = vec3f(input.width, input.height, 1.0);
+	let scaledPosition = vec4f(input.position.xyz * scale, input.position.w);
+
+	output.position = uniforms.viewProj * model * scaledPosition;
+	//output.position = uniforms.viewProj * model * input.position;
 	output.texcoord = input.texcoord;
 	output.color = input.instanceColor;
 	output.textureId = u32(input.textureId);
@@ -170,6 +176,16 @@ export function createRenderPipeline({
 							offset: 20 * 4,
 							format: 'float32',
 						}, // textureIndex
+						{
+							shaderLocation: 8,
+							offset: 21 * 4,
+							format: 'float32',
+						},
+						{
+							shaderLocation: 9,
+							offset: 22 * 4,
+							format: 'float32',
+						},
 					],
 					stepMode: 'instance',
 				},
@@ -263,6 +279,8 @@ export class MatrixAttribute {
 	}
 }
 
+export class Instance {}
+
 /**
  * Manages a dynamically sized GPU buffer to store per-instance data,
  * growing the buffer as needed and tracking the count of instances to draw.
@@ -297,30 +315,43 @@ export class InstanceBuffer {
 			offset += d.length;
 		}
 
-		if (this.#offset + this.#data.byteLength > this.buffer.size) {
-			const newBuffer = device.createBuffer({
-				size: this.buffer.size + this.growth,
-				usage:
-					GPUBufferUsage.VERTEX |
-					GPUBufferUsage.COPY_DST |
-					GPUBufferUsage.COPY_SRC,
-			});
-			const encoder = device.createCommandEncoder();
-			encoder.copyBufferToBuffer(this.buffer, newBuffer);
-			device.queue.submit([encoder.finish()]);
-
-			this.buffer.destroy();
-			(this.buffer as GPUBuffer) = newBuffer;
-		}
+		if (this.#offset + this.#data.byteLength > this.buffer.size)
+			this.grow();
 
 		device.queue.writeBuffer(this.buffer, this.#offset, this.#data.buffer);
 		this.#offset += this.#data.byteLength;
 		(this.count as number)++;
+		return this.#data;
+	}
+
+	setInstance(index: number, data: Float32Array) {
+		const offset = index * this.#data.byteLength;
+		if (offset + data.byteLength > this.buffer.size) {
+			throw new Error('Instance index out of range');
+		}
+		this.program.device.queue.writeBuffer(this.buffer, offset, data.buffer);
 	}
 
 	reset() {
 		this.#offset = 0;
 		(this.count as number) = 0;
+	}
+
+	protected grow() {
+		const device = this.program.device;
+		const newBuffer = device.createBuffer({
+			size: this.buffer.size + this.growth,
+			usage:
+				GPUBufferUsage.VERTEX |
+				GPUBufferUsage.COPY_DST |
+				GPUBufferUsage.COPY_SRC,
+		});
+		const encoder = device.createCommandEncoder();
+		encoder.copyBufferToBuffer(this.buffer, newBuffer);
+		device.queue.submit([encoder.finish()]);
+
+		this.buffer.destroy();
+		(this.buffer as GPUBuffer) = newBuffer;
 	}
 }
 
@@ -340,6 +371,7 @@ export class Program {
 	readonly projection = new Attribute(identity);
 	readonly whiteTexture;
 	readonly textureAtlas: TextureAtlas;
+	readonly instanceBuffer;
 
 	readonly canvas;
 
@@ -351,7 +383,6 @@ export class Program {
 	#defaultVertexBuffer;
 	#vertexBindGroup;
 	#fragmentBindGroup;
-	#instanceBuffer;
 	#vertexUniformBuffer;
 	#textureSampler;
 
@@ -373,12 +404,20 @@ export class Program {
 
 		this.canvas = context.canvas;
 		this.textureAtlas = new TextureAtlas(device);
-		this.#defaultVertexBuffer = this.createBuffer({
+		/*this.#defaultVertexBuffer = this.createBuffer({
 			size: 144,
 			usage: GPUBufferUsage.VERTEX,
 			initial: [
 				-1, -1, 0, 1, 0, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0, 1, 0, 1, -1, 1,
 				0, 1, 0, 1, 1, -1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1,
+			],
+		});*/
+		this.#defaultVertexBuffer = this.createBuffer({
+			size: 144,
+			usage: GPUBufferUsage.VERTEX,
+			initial: [
+				0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+				1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1,
 			],
 		});
 		this.whiteTexture = this.createColorTexture(
@@ -417,7 +456,7 @@ export class Program {
 				},
 			],
 		});
-		this.#instanceBuffer = new InstanceBuffer(this, 24);
+		this.instanceBuffer = new InstanceBuffer(this, 24);
 	}
 
 	updateTextureBindGroup() {
@@ -481,31 +520,31 @@ export class Program {
 
 		renderPass.setPipeline(this.renderPipeline);
 		renderPass.setVertexBuffer(0, this.#defaultVertexBuffer);
-		renderPass.setVertexBuffer(1, this.#instanceBuffer.buffer);
+		renderPass.setVertexBuffer(1, this.instanceBuffer.buffer);
 		renderPass.setBindGroup(0, this.#vertexBindGroup);
 		renderPass.setBindGroup(1, this.#fragmentBindGroup);
-		renderPass.draw(6, this.#instanceBuffer.count, 0, 0);
+		renderPass.draw(6, this.instanceBuffer.count, 0, 0);
 		renderPass.end();
 
 		device.queue.submit([commandEncoder.finish()]);
 	}
 
-	pushInstance() {
-		this.#instanceBuffer.push(
+	pushInstance(width: number, height: number) {
+		return this.instanceBuffer.push(
 			this.model.value,
 			this.color.value,
-			new Float32Array([this.textureId]),
+			new Float32Array([this.textureId, width, height]),
 		);
 	}
 
 	destroy() {
 		this.#defaultVertexBuffer.destroy();
 		this.#vertexUniformBuffer.destroy();
-		this.#instanceBuffer.buffer.destroy();
+		this.instanceBuffer.buffer.destroy();
 	}
 
 	reset() {
-		this.#instanceBuffer.reset();
+		this.instanceBuffer.reset();
 		this.textureAtlas.reset();
 		(this.whiteTexture as Texture) = this.createColorTexture(
 			new Float32Array([1, 1, 1, 1]),
