@@ -31,6 +31,7 @@ export class TextureAtlas {
 	#initialLayers = 4;
 	#nextId = 0;
 	#oldTexture: GPUTexture | undefined;
+	#growMeta = false;
 
 	constructor(public readonly device: GPUDevice) {
 		this.size = device.limits.maxTextureDimension2D;
@@ -71,6 +72,15 @@ export class TextureAtlas {
 
 			this.#oldTexture.destroy();
 			this.#oldTexture = undefined;
+		}
+
+		if (this.#growMeta) {
+			this.textureMetaBuffer.destroy();
+			this.textureMetaBuffer = this.device.createBuffer({
+				size: this.#textureMetaData.byteLength,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			});
+			this.#growMeta = false;
 		}
 
 		this.device.queue.writeBuffer(
@@ -131,6 +141,14 @@ export class TextureAtlas {
 		// 5 + padding
 		const floatsPerMeta = 8;
 		const offset = txt.id * floatsPerMeta;
+
+		if (this.#textureMetaData.length < offset + floatsPerMeta) {
+			const newMeta = new Float32Array(this.#textureMetaData.length * 2);
+			newMeta.set(this.#textureMetaData);
+			this.#textureMetaData = newMeta;
+			this.#growMeta = true;
+		}
+
 		const size = this.size;
 		this.#textureMetaData[offset] = txt.x / size;
 		this.#textureMetaData[offset + 1] = txt.y / size;

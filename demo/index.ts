@@ -9,7 +9,7 @@ const demoSelect = document.getElementById('demo') as HTMLSelectElement;
 const program = await webgpu({
 	canvas: document.getElementById('canvas') as HTMLCanvasElement,
 });
-let engine: Engine; // = new Engine(program);
+let engine: Engine;
 const url = new URL(location.href);
 let demo: EngineJson;
 

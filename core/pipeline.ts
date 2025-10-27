@@ -372,7 +372,6 @@ export class Program {
 	readonly whiteTexture;
 	readonly textureAtlas: TextureAtlas;
 	readonly instanceBuffer;
-
 	readonly canvas;
 
 	textureId = 0;
@@ -404,14 +403,6 @@ export class Program {
 
 		this.canvas = context.canvas;
 		this.textureAtlas = new TextureAtlas(device);
-		/*this.#defaultVertexBuffer = this.createBuffer({
-			size: 144,
-			usage: GPUBufferUsage.VERTEX,
-			initial: [
-				-1, -1, 0, 1, 0, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0, 1, 0, 1, -1, 1,
-				0, 1, 0, 1, 1, -1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1,
-			],
-		});*/
 		this.#defaultVertexBuffer = this.createBuffer({
 			size: 144,
 			usage: GPUBufferUsage.VERTEX,
