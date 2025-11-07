@@ -4,9 +4,7 @@ import { DrawEngine } from './draw.js';
 import type { TextureInit } from './texture-atlas.js';
 import type { Color, Program } from './pipeline.js';
 
-type UpdateFn =
-	| string
-	| ((node: Node, set: (prop: string, value?: unknown) => void) => void);
+type UpdateFn = string | ((node: Node, get: (id: string) => Node) => void);
 
 export interface EngineJson {
 	root: Node;
@@ -35,8 +33,7 @@ export interface Node {
 	readonly children?: Node[];
 
 	/**
-	 * Specifies a custom update callback or script to run after this node and its children are loaded,
-	 * invoked with (node, set, global) for dynamic updates.
+	 * Specifies a custom update callback or script to run after this node and its children are loaded.
 	 */
 	readonly update?: UpdateFn;
 
@@ -48,7 +45,6 @@ export interface Node {
 interface CompiledNode extends Node {
 	box?: Box & { dirty: boolean; parentM: Matrix };
 	_instanceIndex: number;
-	//_instance: Float32Array;
 }
 
 export async function imageLoad({ src, width, height }: TextureComponent) {
@@ -116,9 +112,7 @@ export class Engine {
 		}
 
 		if (node.texture) {
-			const txt = program.textureAtlas.add(
-				await imageLoad(node.texture), //loadArrayBufferFromDataURL(node.texture),
-			);
+			const txt = program.textureAtlas.add(await imageLoad(node.texture));
 			program.textureId = txt.id;
 		}
 
