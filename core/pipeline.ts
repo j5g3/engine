@@ -21,6 +21,7 @@ struct VertexInput {
 	@location(7) textureId: f32,
 	@location(8) width: f32,
 	@location(9) height: f32,
+	@location(10) sdf: f32, // 0=rect, 1=start cap, 2=end cap
 };
 
 struct Uniforms {
@@ -32,6 +33,7 @@ struct VertexOutput {
 	@location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
 	@location(2) @interpolate(flat) textureId: u32,
+	@location(3) @interpolate(flat) capType: u32, // 0=rect, 1=start cap, 2=end cap
 };
 
 @group(0) @binding(0)
@@ -53,10 +55,10 @@ fn main(
 	let scaledPosition = vec4f(input.position.xyz * scale, input.position.w);
 
 	output.position = uniforms.viewProj * model * scaledPosition;
-	//output.position = uniforms.viewProj * model * input.position;
 	output.texcoord = input.texcoord;
 	output.color = input.instanceColor;
 	output.textureId = u32(input.textureId);
+	output.capType = u32(input.sdf);
     return output;
 }
 `;
@@ -67,6 +69,7 @@ struct FragmentInput {
     @location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
 	@location(2) @interpolate(flat) textureId: u32,
+	@location(3) @interpolate(flat) capType: u32, // 0=rect, 1=start cap, 2=end cap
 };
 
 struct TextureMeta {
@@ -82,12 +85,67 @@ struct TextureMeta {
 @group(1) @binding(1) var textureArray: texture_2d_array<f32>;
 @group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
+fn halfDiscSDF(uv: vec2f, dir: f32) -> f32 {
+    let center = vec2f(0.0, 0.5);
+    let radius_x = 1.0;
+    let radius_y = 0.5;
+    let p = vec2((uv.x - center.x) / radius_x, (uv.y - center.y) / radius_y);
+    return length(p) - 1.0; 
+}
+
+fn circleSDF(uv: vec2f) -> f32 {
+    let center = vec2f(0.5, 0.5);
+    let radius = 0.5;
+    return length(uv - center) - radius;
+}
+
+fn roundShapeSDF(uv: vec2f, dir: f32) -> f32 {
+    // When dir = 0 → full circle at (0.5, 0.5)
+    // When dir = -1 → half-disc facing left
+    // When dir =  1 → half-disc facing right
+
+    // Interpolate between the two centers depending on |dir|
+    let isHalf = abs(dir);
+    let center = mix(vec2f(0.5, 0.5), vec2f(0.5 - 0.5 * dir, 0.5), isHalf);
+
+    // Scale radii: full circle = 0.5 radius, half-disc uses full width
+    let radius_x = mix(0.5, 1.0, isHalf);
+    let radius_y = 0.5;
+
+    // Elliptical distance
+    let p = vec2f((uv.x - center.x) / radius_x, (uv.y - center.y) / radius_y);
+    var d = length(p) - 1.0;
+
+    // For half-disc, mask out the opposite side smoothly
+    // planeDist = (uv.x - center.x) * dir → >0 is outside half
+    let planeDist = (uv.x - center.x) * dir;
+    d = mix(d, max(d, planeDist), isHalf);
+
+    return d;
+}
+
 @fragment
 fn main(input: FragmentInput) -> @location(0) vec4f {
 	let tMeta = textureMeta[input.textureId];
 	var uv = tMeta.uvOffset + input.texcoord * tMeta.uvSize;
-	let color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer));
-    return color * input.color;
+	var color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer)) * input.color;
+	
+    var mask: f32 = 1.0;
+    if (input.capType == 1u) {
+        let d = halfDiscSDF(input.texcoord, -1.0);
+        mask = step(0.0, -d); // 1 inside, 0 outside
+    } else if (input.capType == 2u) {
+        let d = halfDiscSDF(input.texcoord, 1.0);
+        mask = step(0.0, -d); // 1 inside, 0 outside
+    } else if (input.capType == 3u) {
+        let d = circleSDF(input.texcoord);
+        mask = step(0.0, -d); // 1 inside, 0 outside
+	}
+    // capType == 0 → mask stays 1.0
+
+    color.a *= mask;
+
+    return color;
 }
 	`;
 
@@ -184,6 +242,11 @@ export function createRenderPipeline({
 						{
 							shaderLocation: 9,
 							offset: 22 * 4,
+							format: 'float32',
+						},
+						{
+							shaderLocation: 10,
+							offset: 23 * 4,
 							format: 'float32',
 						},
 					],
@@ -330,6 +393,11 @@ export class InstanceBuffer {
 			throw new Error('Instance index out of range');
 		}
 		this.program.device.queue.writeBuffer(this.buffer, offset, data.buffer);
+	}
+
+	clear() {
+		this.#offset = 0;
+		(this.count as number) = 0;
 	}
 
 	reset() {
@@ -520,11 +588,11 @@ export class Program {
 		device.queue.submit([commandEncoder.finish()]);
 	}
 
-	pushInstance(width: number, height: number) {
+	pushInstance(width: number, height: number, sdf = 0) {
 		return this.instanceBuffer.push(
 			this.model.value,
 			this.color.value,
-			new Float32Array([this.textureId, width, height]),
+			new Float32Array([this.textureId, width, height, sdf]),
 		);
 	}
 
@@ -532,6 +600,10 @@ export class Program {
 		this.#defaultVertexBuffer.destroy();
 		this.#vertexUniformBuffer.destroy();
 		this.instanceBuffer.buffer.destroy();
+	}
+
+	clear() {
+		this.instanceBuffer.clear();
 	}
 
 	reset() {

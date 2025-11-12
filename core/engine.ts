@@ -39,12 +39,13 @@ export interface Node {
 
 	fill?: Color;
 
-	draw?: (ng: DrawEngine) => void;
+	draw?: (ng: DrawEngine, requestRender: () => void) => void;
 }
 
 interface CompiledNode extends Node {
 	box?: Box & { dirty: boolean; parentM: Matrix };
 	_instanceIndex: number;
+	dirty?: boolean;
 }
 
 export async function imageLoad({ src, width, height }: TextureComponent) {
@@ -122,7 +123,11 @@ export class Engine {
 
 		program.textureId = 0;
 
-		node.draw?.(this.#draw);
+		if (node.draw) {
+			this.#push(
+				() => node.draw?.(this.#draw, () => this.requestRender()),
+			);
+		}
 
 		if (node.children)
 			for (const child of node.children) await this.load(child);
@@ -154,6 +159,11 @@ export class Engine {
 					program.model.value,
 				);
 				compiledNode.box.dirty = false;
+				this.requestRender();
+			}
+
+			if (compiledNode.dirty) {
+				compiledNode.dirty = false;
 				this.requestRender();
 			}
 		});

@@ -28,44 +28,6 @@ export const identity = new Float32Array([
 	1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ]) as Readonly<Matrix>;
 
-/**
- * Creates a matrix that transforms a `Box` to a transformation matrix.
- *
- * This function takes a `Box` object and optionally a destination `Matrix`. It populates the `dst` matrix with the
- * transformations specified by the `Box`. The transformations include:
- * - Rotation: Rotates the box around its center `cx`, `cy` by `rotation` radians.
- * - Scaling: Scales the box by `sx` and `sy` along the x and y axes.
- * - Translation: Translates the box to the position `x`, `y`.
- */
-export function composeBox2(box: Box, dst: Matrix = new Float32Array(16)) {
-	const { x, y, sx, sy, cx, cy, w, h, rotation } = box;
-	dst[2] = dst[3] = dst[6] = dst[7] = dst[8] = dst[9] = dst[11] = dst[14] = 0;
-	dst[10] = dst[15] = 1;
-
-	// Rotate
-	const cos = Math.cos(rotation);
-	const sin = Math.sin(rotation);
-	dst[0] = sx * cos;
-	dst[1] = sx * sin;
-	dst[4] = sy * -sin;
-	dst[5] = sy * cos;
-
-	const halfW = w * 0.5;
-	const halfH = h * 0.5;
-
-	// Translate negative origin
-	dst[12] = dst[0] * -(cx - halfW) + dst[4] * -(cy - halfH) + x;
-	dst[13] = dst[1] * -(cx - halfW) + dst[5] * -(cy - halfH) + y;
-
-	// Scale w and h
-	dst[0] *= halfW;
-	dst[1] *= halfW;
-	dst[4] *= halfH;
-	dst[5] *= halfH;
-
-	return dst;
-}
-
 export function composeBox(box: Box, dst: Matrix = new Float32Array(16)) {
 	const { x, y, sx, sy, cx, cy, rotation } = box;
 	dst[2] = dst[3] = dst[6] = dst[7] = dst[8] = dst[9] = dst[11] = dst[14] = 0;

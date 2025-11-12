@@ -13,11 +13,17 @@ let engine: Engine;
 const url = new URL(location.href);
 let demo: EngineJson;
 
+const demos = {
+	lines: () => import('./lines.js'),
+	rect: () => import('./rect.js'),
+} as const;
+
 async function onChange() {
 	const fn = demoSelect.value;
+
 	demo = fn.endsWith('.json')
 		? await fetch(fn).then(r => r.json())
-		: (await import(`./${fn}.js`)).default;
+		: (await demos[fn as keyof typeof demos]()).default;
 
 	url.searchParams.set('demo', fn);
 
