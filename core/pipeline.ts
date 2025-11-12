@@ -602,6 +602,22 @@ export class Program {
 		this.instanceBuffer.buffer.destroy();
 	}
 
+	resize(width: number, height: number) {
+		// Set the canvas's actual drawing buffer size.
+		if (this.canvas.width !== width || this.canvas.height !== height) {
+			this.canvas.width = width;
+			this.canvas.height = height;
+		}
+
+		const format = navigator.gpu.getPreferredCanvasFormat();
+		// Re-configure the canvas context with the new size.
+		this.context.configure({
+			device: this.device,
+			format,
+			alphaMode: 'premultiplied',
+		});
+	}
+
 	clear() {
 		this.instanceBuffer.clear();
 	}
