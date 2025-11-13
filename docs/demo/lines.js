@@ -43,6 +43,19 @@ export default {
                     line(points[i + 2], points[i + 3], points[i + 2] + dirX * 20, points[i + 3] + dirY * 20);
                 }
             }
+            function drawRevolvedLines(x, y, d, n) {
+                strokeWidth(1);
+                strokeColor([1, 0, 0, 1]);
+                const angleStep = (Math.PI * 2) / n;
+                for (let i = 0; i < n; i++) {
+                    const a = i * angleStep;
+                    const x2 = x + Math.cos(a) * d;
+                    const y2 = y + Math.sin(a) * d;
+                    line(x, y, x2, y2);
+                }
+                strokeWidth(2);
+                strokeColor([0, 1, 0, 1]);
+            }
             clear();
             strokeCap('butt');
             strokeJoin('none');
@@ -151,6 +164,8 @@ export default {
             angle += 0.01;
             if (angle > Math.PI * 2)
                 angle = 0;
+            strokeColor([0, 0, 0, 1]);
+            drawRevolvedLines(100, 600, 100, 12);
             next();
         },
     },

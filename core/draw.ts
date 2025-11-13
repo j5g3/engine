@@ -1,32 +1,21 @@
 import { orthographic, matrix } from './math.js';
 
-import type { Matrix } from './math.js';
 import type { Color, Program } from './pipeline.js';
 
 export type LineCap = 'butt' | 'square' | 'round';
 export type LineJoin = 'none' | 'bevel' | 'round' | 'miter';
 
 /**
- * Configures the transformation matrix to scale and position a rectangle
- * by adjusting scale factors and translation components to fit within the given coordinates.
- */
-function scaleM(m: Matrix, x: number, y: number, w: number, h: number) {
-	m[0] = w;
-	m[5] = h;
-	m[12] = x;
-	m[13] = y;
-}
-
-/**
  * Encapsulates all drawing operations and manages transformation state, color settings,
  * and viewport configurations.
  */
 export class DrawEngine {
-	#RECT_M = matrix();
 	//#unitX = 1;
 	#strokeColor?: Color;
 	#strokeWidth = 1;
 	#unitY = 1;
+	#originX = 0;
+	#originY = 0;
 
 	#lineM = matrix();
 	#lineCap: LineCap = 'butt';
@@ -56,10 +45,7 @@ export class DrawEngine {
 	 * based on the specified coordinates and dimensions.
 	 */
 	rect = (x: number, y: number, w: number, h: number) => {
-		scaleM(this.#RECT_M, x, y, w, h);
-		this.ctx.model.pushMultiply(this.#RECT_M);
-		this.ctx.pushInstance(1, 1);
-		this.ctx.model.pop();
+		this.pushM(w, 0, 0, h, x - this.#originX, y - this.#originY);
 	};
 
 	strokeColor = (color: Color | [number, number, number, number]) => {
@@ -92,6 +78,8 @@ export class DrawEngine {
 		if (points.length < 4) throw new Error('Need at least two points.');
 
 		const thickness = this.#strokeWidth * this.#unitY;
+		const ox = this.#originX;
+		const oy = this.#originY;
 
 		if (this.#strokeColor) {
 			this.ctx.color.set(this.#strokeColor);
@@ -100,20 +88,20 @@ export class DrawEngine {
 		// First Segment
 		if (this.#lineCap !== 'butt') {
 			this.drawCap(
-				points[0],
-				points[1],
-				points[2],
-				points[3],
+				points[0] - ox,
+				points[1] - oy,
+				points[2] - ox,
+				points[3] - oy,
 				thickness,
 				'start',
 			);
 		}
 
 		for (let i = 0; i < points.length - 2; i += 2) {
-			const x0 = points[i];
-			const y0 = points[i + 1];
-			const x1 = points[i + 2];
-			const y1 = points[i + 3];
+			const x0 = points[i] - ox;
+			const y0 = points[i + 1] - oy;
+			const x1 = points[i + 2] - ox;
+			const y1 = points[i + 3] - oy;
 			this.lineSegment(x0, y0, x1, y1, thickness);
 
 			if (i < points.length - 4) {
@@ -123,13 +111,13 @@ export class DrawEngine {
 					this.#lineJoin === 'bevel' ||
 					this.#lineJoin === 'miter'
 				) {
-					const x2 = points[i + 4];
-					const y2 = points[i + 5];
+					const x2 = points[i + 4] - ox;
+					const y2 = points[i + 5] - oy;
 					this.drawBevelJoin(x0, y0, x1, y1, x2, y2, thickness);
 				}
 				if (this.#lineJoin === 'miter') {
-					const x2 = points[i + 4];
-					const y2 = points[i + 5];
+					const x2 = points[i + 4] - ox;
+					const y2 = points[i + 5] - oy;
 					this.drawMiterJoin(x0, y0, x1, y1, x2, y2, thickness);
 				}
 			}
@@ -138,10 +126,10 @@ export class DrawEngine {
 		if (this.#lineCap !== 'butt') {
 			const last = points.length - 2;
 			this.drawCap(
-				points[last - 2],
-				points[last - 1],
-				points[last],
-				points[last + 1],
+				points[last - 2] - ox,
+				points[last - 1] - oy,
+				points[last] - ox,
+				points[last + 1] - oy,
 				thickness,
 				'end',
 			);
@@ -154,9 +142,12 @@ export class DrawEngine {
 	 * allowing rendering to be confined within the specified subregion of the canvas.
 	 */
 	viewport = (x: number, y: number, x2: number, y2: number) => {
-		this.ctx.projection.set(orthographic(x, x2, y2, y, -1, 1));
+		//this.ctx.projection.set(orthographic(x, x2, y2, y, -1, 1));
+		this.ctx.projection.set(orthographic(0, x2 - x, y2 - y, 0, -1, 1));
 		//this.#unitX = (x2 - x) / this.ctx.canvas.width;
 		this.#unitY = (y2 - y) / this.ctx.canvas.height;
+		this.#originX = x;
+		this.#originY = y;
 	};
 
 	/**
