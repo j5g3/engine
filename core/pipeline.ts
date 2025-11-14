@@ -133,15 +133,14 @@ fn main(input: FragmentInput) -> @location(0) vec4f {
     var mask: f32 = 1.0;
     if (input.capType == 1u) {
         let d = halfDiscSDF(input.texcoord, -1.0);
-        mask = step(0.0, -d); // 1 inside, 0 outside
+        mask = step(0.0, -d);
     } else if (input.capType == 2u) {
         let d = halfDiscSDF(input.texcoord, 1.0);
-        mask = step(0.0, -d); // 1 inside, 0 outside
+        mask = step(0.0, -d);
     } else if (input.capType == 3u) {
         let d = circleSDF(input.texcoord);
-        mask = step(0.0, -d); // 1 inside, 0 outside
+        mask = step(0.0, -d);
 	}
-    // capType == 0 → mask stays 1.0
 
     color.a *= mask;
 

@@ -116,17 +116,13 @@ export class DrawEngine {
 			const y0 = (points[i + 1] - oy) / sy;
 			const x1 = (points[i + 2] - ox) / sx;
 			const y1 = (points[i + 3] - oy) / sy;
-			const x2 = (points[i + 4] - ox) / sx;
-			const y2 = (points[i + 5] - oy) / sy;
+
 			this.lineSegment(x0, y0, x1, y1, thickness);
 
-			const dx = x2 - x1;
-			const dy = y2 - y1;
-			if (dx * dx + dy * dy < 1) {
-				continue; // Skip this point, too close
-			}
-
 			if (i < points.length - 4) {
+				const x2 = (points[i + 4] - ox) / sx;
+				const y2 = (points[i + 5] - oy) / sy;
+
 				if (this.#lineJoin === 'round') {
 					this.drawRoundJoin(x1, y1, thickness);
 				} else if (
