@@ -10,16 +10,28 @@ export type LineJoin = 'none' | 'bevel' | 'round' | 'miter';
  * and viewport configurations.
  */
 export class DrawEngine {
-	//#unitX = 1;
 	#strokeColor?: Color;
 	#strokeWidth = 1;
 	#unitY = 1;
 	#originX = 0;
 	#originY = 0;
+	#scaleX = 1;
+	#scaleY = 1;
 
 	#lineM = matrix();
 	#lineCap: LineCap = 'butt';
 	#lineJoin: LineJoin = 'none';
+	#bevel = {
+		Ax: 0,
+		Ay: 0,
+		Bx: 0,
+		By: 0,
+		uxIn: 0,
+		uyIn: 0,
+		uxOut: 0,
+		uyOut: 0,
+		turn: 1 as 1 | -1,
+	};
 
 	constructor(protected ctx: Program) {
 		this.resetViewport();
@@ -80,6 +92,8 @@ export class DrawEngine {
 		const thickness = this.#strokeWidth * this.#unitY;
 		const ox = this.#originX;
 		const oy = this.#originY;
+		const sx = this.#scaleX;
+		const sy = this.#scaleY;
 
 		if (this.#strokeColor) {
 			this.ctx.color.set(this.#strokeColor);
@@ -88,21 +102,29 @@ export class DrawEngine {
 		// First Segment
 		if (this.#lineCap !== 'butt') {
 			this.drawCap(
-				points[0] - ox,
-				points[1] - oy,
-				points[2] - ox,
-				points[3] - oy,
+				(points[0] - ox) / sx,
+				(points[1] - oy) / sy,
+				(points[2] - ox) / sx,
+				(points[3] - oy) / sy,
 				thickness,
 				'start',
 			);
 		}
 
 		for (let i = 0; i < points.length - 2; i += 2) {
-			const x0 = points[i] - ox;
-			const y0 = points[i + 1] - oy;
-			const x1 = points[i + 2] - ox;
-			const y1 = points[i + 3] - oy;
+			const x0 = (points[i] - ox) / sx;
+			const y0 = (points[i + 1] - oy) / sy;
+			const x1 = (points[i + 2] - ox) / sx;
+			const y1 = (points[i + 3] - oy) / sy;
+			const x2 = (points[i + 4] - ox) / sx;
+			const y2 = (points[i + 5] - oy) / sy;
 			this.lineSegment(x0, y0, x1, y1, thickness);
+
+			const dx = x2 - x1;
+			const dy = y2 - y1;
+			if (dx * dx + dy * dy < 1) {
+				continue; // Skip this point, too close
+			}
 
 			if (i < points.length - 4) {
 				if (this.#lineJoin === 'round') {
@@ -111,13 +133,9 @@ export class DrawEngine {
 					this.#lineJoin === 'bevel' ||
 					this.#lineJoin === 'miter'
 				) {
-					const x2 = points[i + 4] - ox;
-					const y2 = points[i + 5] - oy;
 					this.drawBevelJoin(x0, y0, x1, y1, x2, y2, thickness);
 				}
 				if (this.#lineJoin === 'miter') {
-					const x2 = points[i + 4] - ox;
-					const y2 = points[i + 5] - oy;
 					this.drawMiterJoin(x0, y0, x1, y1, x2, y2, thickness);
 				}
 			}
@@ -126,10 +144,10 @@ export class DrawEngine {
 		if (this.#lineCap !== 'butt') {
 			const last = points.length - 2;
 			this.drawCap(
-				points[last - 2] - ox,
-				points[last - 1] - oy,
-				points[last] - ox,
-				points[last + 1] - oy,
+				(points[last - 2] - ox) / sx,
+				(points[last - 1] - oy) / sy,
+				(points[last] - ox) / sx,
+				(points[last + 1] - oy) / sy,
 				thickness,
 				'end',
 			);
@@ -142,12 +160,24 @@ export class DrawEngine {
 	 * allowing rendering to be confined within the specified subregion of the canvas.
 	 */
 	viewport = (x: number, y: number, x2: number, y2: number) => {
-		//this.ctx.projection.set(orthographic(x, x2, y2, y, -1, 1));
-		this.ctx.projection.set(orthographic(0, x2 - x, y2 - y, 0, -1, 1));
-		//this.#unitX = (x2 - x) / this.ctx.canvas.width;
-		this.#unitY = (y2 - y) / this.ctx.canvas.height;
+		const dx = x2 - x;
+		const dy = y2 - y;
+
+		this.#scaleX = dx / this.ctx.canvas.width;
+		this.#scaleY = dy / this.ctx.canvas.height;
 		this.#originX = x;
 		this.#originY = y;
+
+		this.ctx.projection.set(
+			orthographic(
+				0,
+				this.ctx.canvas.width,
+				this.ctx.canvas.height,
+				0,
+				-1,
+				1,
+			),
+		);
 	};
 
 	/**
@@ -180,13 +210,13 @@ export class DrawEngine {
 	) {
 		const dx = x1 - x0;
 		const dy = y1 - y0;
-		const len = Math.hypot(dx, dy);
+		let len = Math.sqrt(dx * dx + dy * dy);
 
-		if (len === 0) return;
+		const cos = dx / len;
+		const sin = dy / len;
 
-		const angle = Math.atan2(dy, dx);
-		const cos = Math.cos(angle);
-		const sin = Math.sin(angle);
+		if (len < 1) len = 1;
+
 		const m4 = thickness * -sin;
 		const m5 = thickness * cos;
 
@@ -221,41 +251,36 @@ export class DrawEngine {
 		y2: number,
 		thickness: number,
 	) {
-		const w = thickness / 2;
+		const b = this.#bevel;
 		const Vx_in = x1 - x0;
 		const Vy_in = y1 - y0;
 		const len_in = Math.sqrt(Vx_in * Vx_in + Vy_in * Vy_in);
 		if (len_in === 0) return;
 
-		const Ux_in = Vx_in / len_in;
-		const Uy_in = Vy_in / len_in;
+		const Ux_in = (b.uxIn = Vx_in / len_in);
+		const Uy_in = (b.uyIn = Vy_in / len_in);
 
 		const Vx_out = x2 - x1;
 		const Vy_out = y2 - y1;
 		const len_out = Math.sqrt(Vx_out * Vx_out + Vy_out * Vy_out);
 		if (len_out === 0) return;
 
-		const Ux_out = Vx_out / len_out;
-		const Uy_out = Vy_out / len_out;
+		const Ux_out = (b.uxOut = Vx_out / len_out);
+		const Uy_out = (b.uyOut = Vy_out / len_out);
 
 		// Positive result means a Left (CCW) turn. Negative means a Right (CW) turn.
 		const crossProduct = Vx_in * Vy_out - Vy_in * Vx_out;
 
-		// N_perp_in: Perpendicular to U_in in the CCW direction (Nx = -Uy, Ny = Ux)
-		const Np_x_in = -Uy_in;
-		const Np_y_in = Ux_in;
+		b.turn = crossProduct <= 0 ? 1 : -1;
 
-		// N_perp_out: Perpendicular to U_out in the CCW direction
-		const Np_x_out = -Uy_out;
-		const Np_y_out = Ux_out;
+		const w = (thickness / 2) * b.turn;
 
-		const turn = crossProduct <= 0 ? 1 : -1;
-		const Ax = x1 + Np_x_in * w * turn;
-		const Ay = y1 + Np_y_in * w * turn;
-		const Bx = x1 + Np_x_out * w * turn;
-		const By = y1 + Np_y_out * w * turn;
+		b.Ax = x1 + -Uy_in * w;
+		b.Ay = y1 + Ux_in * w;
+		b.Bx = x1 + -Uy_out * w;
+		b.By = y1 + Ux_out * w;
 
-		return { Ax, Ay, Bx, By, Ux_in, Uy_in, Ux_out, Uy_out, turn };
+		return b;
 	}
 
 	protected drawBevelJoin(
@@ -317,11 +342,14 @@ export class DrawEngine {
 		const w = thickness / 2;
 		const bevel = this.getBevelPoints(x0, y0, x1, y1, x2, y2, thickness);
 		if (!bevel) return;
-		const { Ax, Ay, Bx, By, Ux_in, Uy_in, Ux_out, Uy_out, turn } = bevel;
+		const { Ax, Ay, Bx, By, uxIn, uyIn, uxOut, uyOut, turn } = bevel;
+
+		const dp = uxIn * uxOut + uyIn * uyOut;
+		if (dp < -0.9510565162951536) return;
 
 		// Miter vector along bisector pointing outside
-		const Mx = (-Uy_in - Uy_out) * turn;
-		const My = (Ux_in + Ux_out) * turn;
+		const Mx = (-uyIn - uyOut) * turn;
+		const My = (uxIn + uxOut) * turn;
 
 		const Mlen = Math.sqrt(Mx * Mx + My * My);
 
@@ -333,12 +361,12 @@ export class DrawEngine {
 		// Clamp to limit
 		if (miterLen > miterLimit) return;
 
-		const angleThreshold = Math.PI * 0.9; // ~162 degrees
+		/*const angleThreshold = Math.PI * 0.9; // ~162 degrees
 		const angle = Math.acos(
-			Math.max(-1, Math.min(1, Ux_in * Ux_out + Uy_in * Uy_out)),
+			Math.max(-1, Math.min(1, uxIn * uxOut + uyIn * uyOut)),
 		);
 
-		if (angle > angleThreshold) return;
+		if (angle > angleThreshold) return;*/
 
 		// Miter/bevel point
 		const Px = x1 + (Mx / Mlen) * miterLen;

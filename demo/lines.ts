@@ -89,7 +89,6 @@ export default {
 				n: number,
 			) {
 				strokeWidth(1);
-				strokeColor([1, 0, 0, 1]); // red color for example
 				const angleStep = (Math.PI * 2) / n;
 				for (let i = 0; i < n; i++) {
 					const a = i * angleStep;
@@ -241,7 +240,7 @@ export default {
 			if (angle > Math.PI * 2) angle = 0;
 
 			strokeColor([0, 0, 0, 1]);
-			drawRevolvedLines(100, 600, 100, 12);
+			drawRevolvedLines(140, 600, 100, 20);
 
 			next();
 		},
