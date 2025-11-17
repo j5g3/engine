@@ -2,9 +2,21 @@
 	"name": "@j5g3/",
 	"private": true,
 	"version": "0.0.0",
+	"homepage": "https://github.com/j5g3/engine",
+	"description": "This repo contains a work-in-progress graphics engine built with TypeScript, leveraging WebGPU.",
 	"devDependencies": {
 		"@cxl/build": "^1.0.0-beta",
 		"@cxl/spec": "^1.0.1",
-		"@webgpu/types": "^0.1.65"
-	}
+		"@webgpu/types": "^0.1.65",
+		"esbuild": "^0.27.0"
+	},
+	"bugs": "https://github.com/j5g3/engine/issues",
+	"scripts": {
+		"build": "cxl-build"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/j5g3/engine.git"
+	},
+	"docs": "https://cxlio.github.io/docs"
 }

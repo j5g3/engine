@@ -2,11 +2,19 @@
 	"name": "@j5g3/demo",
 	"version": "0.0.1",
 	"bugs": "https://github.com/j5g3/engine/issues",
-	"homepage": "https://github.com/j5g3/engine",
-	"description": "j5g3",
-	"license": "UNLICENSED",
+	"homepage": "https:/github.com/j5g3/engine/demo",
+	"description": "Demo files",
+	"license": "GPL-3.0",
 	"type": "module",
+	"browser": "./index.bundle.js",
 	"scripts": {
-		"build": "./build.sh"
-	}
+		"build": "./build.sh",
+		"test": "npm run build test"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/j5g3/engine.git",
+		"directory": "demo"
+	},
+	"docs": "https://j5g3.github.io/engine/demo/"
 }

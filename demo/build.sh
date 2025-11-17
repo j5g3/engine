@@ -2,7 +2,7 @@ set -e
 
 cxl-build $@
 
-rm ../docs/demo/*
+rm -f ../docs/demo/*
 mkdir -p ../docs/demo 
 cp ../dist/demo/*.js *.html orbs.json clock.json ../docs/demo
 
