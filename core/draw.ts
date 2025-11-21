@@ -4,6 +4,9 @@ import type { Color, Program } from './pipeline.js';
 
 export type LineCap = 'butt' | 'square' | 'round';
 export type LineJoin = 'none' | 'bevel' | 'round' | 'miter';
+export type DrawColor = Color | [number, number, number, number];
+
+const PI2 = Math.PI * 2;
 
 /**
  * Encapsulates all drawing operations and manages transformation state, color settings,
@@ -40,16 +43,22 @@ export class DrawEngine {
 	/**
 	 * Sets the fill color for subsequent drawing operations.
 	 */
-	readonly color = (fill: Color, stroke = fill) => {
-		this.ctx.color.set(fill);
-		this.#strokeColor = stroke;
+	readonly color = (fill: DrawColor, stroke?: DrawColor) => {
+		this.ctx.color.set(Array.isArray(fill) ? new Float32Array(fill) : fill);
+		if (stroke) this.strokeColor(stroke);
 	};
 
 	/**
 	 * Updates the current fill color used for rendering shapes.
 	 */
-	fillColor = (newColor: Color) => {
-		this.ctx.color.set(newColor);
+	fillColor = (newColor: DrawColor) => {
+		this.color(newColor);
+	};
+
+	strokeColor = (color: DrawColor) => {
+		this.#strokeColor = Array.isArray(color)
+			? new Float32Array(color)
+			: color;
 	};
 
 	/**
@@ -60,10 +69,55 @@ export class DrawEngine {
 		this.pushM(w, 0, 0, h, x - this.#originX, y - this.#originY);
 	};
 
-	strokeColor = (color: Color | [number, number, number, number]) => {
-		this.#strokeColor = Array.isArray(color)
-			? new Float32Array(color)
-			: color;
+	circle = (x: number, y: number, r: number) => {
+		this.pushM(
+			r * 2,
+			0,
+			0,
+			r * 2,
+			x - r - this.#originX,
+			y - r - this.#originY,
+			PI2,
+		);
+	};
+
+	ellipse = (x: number, y: number, rx: number, ry: number) => {
+		this.pushM(
+			rx * 2,
+			0,
+			0,
+			ry * 2,
+			x - rx - this.#originX,
+			y - ry - this.#originY,
+			PI2,
+		);
+	};
+
+	arc = (
+		x: number,
+		y: number,
+		startAngle: number,
+		endAngle: number,
+		outerRadius: number,
+		innerRadius = 0,
+	) => {
+		if (startAngle > endAngle) {
+			const end = endAngle;
+			endAngle = startAngle;
+			startAngle = end;
+		}
+
+		const c = Math.cos(startAngle);
+		const s = Math.sin(startAngle);
+
+		const w = outerRadius * 2;
+		const m0 = w * c;
+		const m1 = w * s;
+		const tx = x - this.#originX - 0.5 * (m0 - m1);
+		const ty = y - this.#originY - 0.5 * (m1 + m0);
+		const sweep = endAngle - startAngle;
+
+		this.pushM(m0, m1, -m1, m0, tx, ty, sweep, innerRadius / w);
 	};
 
 	strokeWidth = (width: number) => {
@@ -234,7 +288,7 @@ export class DrawEngine {
 			thickness,
 			x - thickness / 2,
 			y - thickness / 2,
-			3,
+			PI2,
 		);
 	}
 
@@ -309,7 +363,8 @@ export class DrawEngine {
 		m5: number,
 		m12: number,
 		m13: number,
-		sdf = 0, // 0 = none, 1 = start-cap, 2 = end-cap, 4 = circle
+		endAngle = -1, // Used to apply radial SDF, set to negative to skip
+		innerRadius = 0, // Used to draw rings and arcs
 	) {
 		const m = this.#lineM;
 
@@ -321,7 +376,7 @@ export class DrawEngine {
 		m[13] = m13;
 
 		this.ctx.model.pushMultiply(m);
-		this.ctx.pushInstance(1, 1, sdf);
+		this.ctx.pushInstance(1, 1, endAngle, innerRadius);
 		this.ctx.model.pop();
 	}
 
@@ -354,15 +409,7 @@ export class DrawEngine {
 		const sinHalfAngle = Mlen / 2;
 		const miterLen = w / sinHalfAngle;
 
-		// Clamp to limit
 		if (miterLen > miterLimit) return;
-
-		/*const angleThreshold = Math.PI * 0.9; // ~162 degrees
-		const angle = Math.acos(
-			Math.max(-1, Math.min(1, uxIn * uxOut + uyIn * uyOut)),
-		);
-
-		if (angle > angleThreshold) return;*/
 
 		// Miter/bevel point
 		const Px = x1 + (Mx / Mlen) * miterLen;
@@ -380,23 +427,17 @@ export class DrawEngine {
 		direction: 'start' | 'end',
 	) {
 		const isStart = direction === 'start';
-		const x0 = isStart ? x : x2;
-		const y0 = isStart ? y : y2;
-		const angle = Math.atan2(y2 - y, x2 - x);
-		const cos = Math.cos(angle);
-		const sin = Math.sin(angle);
-		const off = (thickness / 2) * (isStart ? -1 : 1);
-		const m4 = thickness * -sin;
-		const m5 = thickness * cos;
-
+		const half = thickness / 2;
+		const x0 = (isStart ? x : x2) - half;
+		const y0 = (isStart ? y : y2) - half;
 		this.pushM(
-			off * cos,
-			off * sin,
-			m4,
-			m5,
-			m4 * -0.5 + x0,
-			m5 * -0.5 + y0,
-			this.#lineCap === 'round' ? (isStart ? 1 : 2) : 0,
+			thickness,
+			0,
+			0,
+			thickness,
+			x0 - this.#originX,
+			y0 - this.#originY,
+			PI2,
 		);
 	}
 }

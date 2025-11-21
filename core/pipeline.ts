@@ -21,7 +21,11 @@ struct VertexInput {
 	@location(7) textureId: f32,
 	@location(8) width: f32,
 	@location(9) height: f32,
-	@location(10) sdf: f32, // 0=rect, 1=start cap, 2=end cap
+	
+	// Use this to draw circles, wedges, and arcs using SDF.
+	// Set the value to a negative number to skip this effect.
+	@location(10) endAngle: f32,
+	@location(11) innerRadius: f32,
 };
 
 struct Uniforms {
@@ -33,7 +37,8 @@ struct VertexOutput {
 	@location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
 	@location(2) @interpolate(flat) textureId: u32,
-	@location(3) @interpolate(flat) capType: u32, // 0=rect, 1=start cap, 2=end cap
+	@location(3) @interpolate(flat) endAngle: f32,
+	@location(4) @interpolate(flat) innerRadius: f32,
 };
 
 @group(0) @binding(0)
@@ -58,7 +63,8 @@ fn main(
 	output.texcoord = input.texcoord;
 	output.color = input.instanceColor;
 	output.textureId = u32(input.textureId);
-	output.capType = u32(input.sdf);
+	output.endAngle = input.endAngle;
+	output.innerRadius = input.innerRadius;
     return output;
 }
 `;
@@ -69,7 +75,8 @@ struct FragmentInput {
     @location(0) texcoord: vec2f,
 	@location(1) color: vec4f,
 	@location(2) @interpolate(flat) textureId: u32,
-	@location(3) @interpolate(flat) capType: u32, // 0=rect, 1=start cap, 2=end cap
+	@location(3) @interpolate(flat) endAngle: f32,
+	@location(4) @interpolate(flat) innerRadius: f32,
 };
 
 struct TextureMeta {
@@ -85,43 +92,37 @@ struct TextureMeta {
 @group(1) @binding(1) var textureArray: texture_2d_array<f32>;
 @group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
-fn halfDiscSDF(uv: vec2f, dir: f32) -> f32 {
-    let center = vec2f(0.0, 0.5);
-    let radius_x = 1.0;
-    let radius_y = 0.5;
-    let p = vec2((uv.x - center.x) / radius_x, (uv.y - center.y) / radius_y);
-    return length(p) - 1.0; 
-}
-
-fn circleSDF(uv: vec2f) -> f32 {
+fn shapeMask(
+    uv: vec2f,    
+    innerRadius: f32,
+    endAngle: f32,
+) -> f32 {
     let center = vec2f(0.5, 0.5);
-    let radius = 0.5;
-    return length(uv - center) - radius;
-}
+    let p = uv - center;
+    let d = length(p);
 
-fn roundShapeSDF(uv: vec2f, dir: f32) -> f32 {
-    // When dir = 0 → full circle at (0.5, 0.5)
-    // When dir = -1 → half-disc facing left
-    // When dir =  1 → half-disc facing right
+    // ring or full disc
+    let innerMask = step(innerRadius, d);
+    let outerMask = step(d, 0.5);
+    var mask = innerMask * outerMask;
 
-    // Interpolate between the two centers depending on |dir|
-    let isHalf = abs(dir);
-    let center = mix(vec2f(0.5, 0.5), vec2f(0.5 - 0.5 * dir, 0.5), isHalf);
+    // angle mask only if needed
+    if (endAngle < 6.28318530718) {
+        let pNorm = p / d;
+        let endVec = vec2f(cos(endAngle), sin(endAngle));
+        let crossStart = pNorm.y;
+        let crossEnd = pNorm.x * endVec.y - pNorm.y * endVec.x;
+        
+        // For angles <= PI: point must be between start and end (both cross products positive)
+        // For angles > PI: point must NOT be in the gap (at least one cross product positive)
+        let isLessThanPi = step(endAngle, 3.14159265359);
+        let maskSmall = step(0.0, crossStart) * step(0.0, crossEnd);
+        let maskLarge = max(step(0.0, crossStart), step(0.0, crossEnd));
+        
+        mask *= mix(maskLarge, maskSmall, isLessThanPi);
+    }
 
-    // Scale radii: full circle = 0.5 radius, half-disc uses full width
-    let radius_x = mix(0.5, 1.0, isHalf);
-    let radius_y = 0.5;
-
-    // Elliptical distance
-    let p = vec2f((uv.x - center.x) / radius_x, (uv.y - center.y) / radius_y);
-    var d = length(p) - 1.0;
-
-    // For half-disc, mask out the opposite side smoothly
-    // planeDist = (uv.x - center.x) * dir → >0 is outside half
-    let planeDist = (uv.x - center.x) * dir;
-    d = mix(d, max(d, planeDist), isHalf);
-
-    return d;
+    return mask;
 }
 
 @fragment
@@ -131,18 +132,11 @@ fn main(input: FragmentInput) -> @location(0) vec4f {
 	var color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer)) * input.color;
 	
     var mask: f32 = 1.0;
-    if (input.capType == 1u) {
-        let d = halfDiscSDF(input.texcoord, -1.0);
-        mask = step(0.0, -d);
-    } else if (input.capType == 2u) {
-        let d = halfDiscSDF(input.texcoord, 1.0);
-        mask = step(0.0, -d);
-    } else if (input.capType == 3u) {
-        let d = circleSDF(input.texcoord);
-        mask = step(0.0, -d);
+	if (input.endAngle >= 0.0) {
+		mask = shapeMask(input.texcoord, input.innerRadius, input.endAngle);
 	}
 
-    color.a *= mask;
+    color *= mask;
 
     return color;
 }
@@ -205,7 +199,7 @@ export function createRenderPipeline({
 					stepMode: 'vertex',
 				},
 				{
-					arrayStride: 96,
+					arrayStride: 100,
 					attributes: [
 						{ shaderLocation: 2, offset: 0, format: 'float32x4' },
 						{
@@ -246,6 +240,12 @@ export function createRenderPipeline({
 						{
 							shaderLocation: 10,
 							offset: 23 * 4,
+							format: 'float32',
+						},
+
+						{
+							shaderLocation: 11,
+							offset: 24 * 4,
 							format: 'float32',
 						},
 					],
@@ -514,7 +514,7 @@ export class Program {
 				},
 			],
 		});
-		this.instanceBuffer = new InstanceBuffer(this, 24);
+		this.instanceBuffer = new InstanceBuffer(this, 25);
 	}
 
 	updateTextureBindGroup() {
@@ -587,11 +587,22 @@ export class Program {
 		device.queue.submit([commandEncoder.finish()]);
 	}
 
-	pushInstance(width: number, height: number, sdf = 0) {
+	pushInstance(
+		width: number,
+		height: number,
+		endAngle = -1,
+		innerRadius = 0,
+	) {
 		return this.instanceBuffer.push(
 			this.model.value,
 			this.color.value,
-			new Float32Array([this.textureId, width, height, sdf]),
+			new Float32Array([
+				this.textureId,
+				width,
+				height,
+				endAngle,
+				innerRadius,
+			]),
 		);
 	}
 

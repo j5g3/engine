@@ -16,6 +16,7 @@ let demo: EngineJson;
 const demos = {
 	lines: () => import('./lines.js'),
 	rect: () => import('./rect.js'),
+	circles: () => import('./circles.js'),
 } as const;
 
 async function onChange() {
