@@ -153,7 +153,6 @@ export class DrawEngine {
 			this.ctx.color.set(this.#strokeColor);
 		}
 
-		// First Segment
 		if (this.#lineCap !== 'butt') {
 			this.drawCap(
 				(points[0] - ox) / sx,
@@ -162,6 +161,16 @@ export class DrawEngine {
 				(points[3] - oy) / sy,
 				thickness,
 				'start',
+			);
+
+			const last = points.length - 2;
+			this.drawCap(
+				(points[last - 2] - ox) / sx,
+				(points[last - 1] - oy) / sy,
+				(points[last] - ox) / sx,
+				(points[last + 1] - oy) / sy,
+				thickness,
+				'end',
 			);
 		}
 
@@ -189,18 +198,6 @@ export class DrawEngine {
 					this.drawMiterJoin(x0, y0, x1, y1, x2, y2, thickness);
 				}
 			}
-		}
-
-		if (this.#lineCap !== 'butt') {
-			const last = points.length - 2;
-			this.drawCap(
-				(points[last - 2] - ox) / sx,
-				(points[last - 1] - oy) / sy,
-				(points[last] - ox) / sx,
-				(points[last + 1] - oy) / sy,
-				thickness,
-				'end',
-			);
 		}
 	};
 
@@ -428,16 +425,39 @@ export class DrawEngine {
 	) {
 		const isStart = direction === 'start';
 		const half = thickness / 2;
-		const x0 = (isStart ? x : x2) - half;
-		const y0 = (isStart ? y : y2) - half;
-		this.pushM(
-			thickness,
-			0,
-			0,
-			thickness,
-			x0 - this.#originX,
-			y0 - this.#originY,
-			PI2,
-		);
+
+		// Position of the cap anchor (before rotation/offset)
+		const px = isStart ? x : x2;
+		const py = isStart ? y : y2;
+
+		if (this.#lineCap === 'round') {
+			this.pushM(
+				thickness,
+				0,
+				0,
+				thickness,
+				px - half - this.#originX,
+				py - half - this.#originY,
+				PI2,
+			);
+			return;
+		}
+
+		// Square cap: oriented by line direction
+		let dx = x2 - x;
+		let dy = y2 - y;
+		const len = Math.hypot(dx, dy) || 1;
+
+		dx /= len;
+		dy /= len;
+
+		const m0 = half * dx;
+		const m1 = half * dy;
+		const m4 = -thickness * dy;
+		const m5 = thickness * dx;
+		const tx = px - (isStart ? m0 : 0) - 0.5 * m4;
+		const ty = py - (isStart ? m1 : 0) - 0.5 * m5;
+
+		this.pushM(m0, m1, m4, m5, tx, ty);
 	}
 }

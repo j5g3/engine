@@ -29,7 +29,7 @@ async function onChange() {
 	url.searchParams.set('demo', fn);
 
 	try {
-		history.pushState(undefined, '', url.search);
+		history.replaceState(undefined, '', url.search);
 	} catch (e) {
 		console.error(e);
 	}

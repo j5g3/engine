@@ -92,7 +92,7 @@ struct TextureMeta {
 @group(1) @binding(1) var textureArray: texture_2d_array<f32>;
 @group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
-fn shapeMask(
+fn shapeSDF(
     uv: vec2f,    
     innerRadius: f32,
     endAngle: f32,
@@ -100,29 +100,36 @@ fn shapeMask(
     let center = vec2f(0.5, 0.5);
     let p = uv - center;
     let d = length(p);
-
-    // ring or full disc
-    let innerMask = step(innerRadius, d);
-    let outerMask = step(d, 0.5);
-    var mask = innerMask * outerMask;
-
-    // angle mask only if needed
+    
+    // Ring SDF: positive outside, negative inside
+    let ringSDF = max(innerRadius - d, d - 0.5);
+    
+    // Angle SDF (only if not a full circle)
+    var angleSDF = -1.0;
     if (endAngle < 6.28318530718) {
-        let pNorm = p / d;
+        let pNorm = p / max(d, 0.0001); // avoid division by zero
         let endVec = vec2f(cos(endAngle), sin(endAngle));
+        
         let crossStart = pNorm.y;
         let crossEnd = pNorm.x * endVec.y - pNorm.y * endVec.x;
         
-        // For angles <= PI: point must be between start and end (both cross products positive)
-        // For angles > PI: point must NOT be in the gap (at least one cross product positive)
-        let isLessThanPi = step(endAngle, 3.14159265359);
-        let maskSmall = step(0.0, crossStart) * step(0.0, crossEnd);
-        let maskLarge = max(step(0.0, crossStart), step(0.0, crossEnd));
-        
-        mask *= mix(maskLarge, maskSmall, isLessThanPi);
+        if (endAngle <= 3.14159265359) {
+            // Small wedge: outside if either cross product is negative
+            angleSDF = max(-crossStart, -crossEnd);
+        } else {
+            // Large wedge: outside only if both are negative
+            angleSDF = min(-crossStart, -crossEnd);
+        }
     }
+    
+    return max(ringSDF, angleSDF);
+}
 
-    return mask;
+fn quadSDF(uv: vec2f) -> f32 {
+    let center = vec2f(0.5, 0.5);
+    let halfSize = vec2f(0.5, 0.5);
+    let p = abs(uv - center) - halfSize;
+    return length(max(p, vec2f(0.0))) + min(max(p.x, p.y), 0.0);
 }
 
 @fragment
@@ -131,12 +138,17 @@ fn main(input: FragmentInput) -> @location(0) vec4f {
 	var uv = tMeta.uvOffset + input.texcoord * tMeta.uvSize;
 	var color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer)) * input.color;
 	
-    var mask: f32 = 1.0;
-	if (input.endAngle >= 0.0) {
-		mask = shapeMask(input.texcoord, input.innerRadius, input.endAngle);
-	}
+    var sdf: f32;
+    if (input.endAngle >= 0.0) {
+        sdf = shapeSDF(input.texcoord, input.innerRadius, input.endAngle);
+    } else {
+        sdf = quadSDF(input.texcoord);
+    }
 
-    color *= mask;
+    let pixelSize = (fwidth(input.texcoord.x) + fwidth(input.texcoord.y)) * 0.5;
+    let alpha = 1.0 - smoothstep(0, pixelSize, sdf);
+
+    color *= alpha;
 
     return color;
 }

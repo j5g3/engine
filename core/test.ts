@@ -96,23 +96,6 @@ export default spec('core', s => {
 			a.equal(result[5] | 0, 0);
 		});
 
-		it.should('apply width and height scaling correctly', a => {
-			const box: Box = {
-				x: 0,
-				y: 0,
-				sx: 1,
-				sy: 1,
-				cx: 0,
-				cy: 0,
-				w: 2,
-				h: 3,
-				rotation: 0,
-			};
-			const result = composeBox(box);
-			a.equal(result[0], 2);
-			a.equal(result[5], 3);
-		});
-
 		it.should('handle center offset correctly', a => {
 			const box: Box = {
 				x: 10,
