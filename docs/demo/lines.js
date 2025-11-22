@@ -146,9 +146,9 @@ export default {
             drawPolyline([
                 600,
                 600,
-                700,
+                650,
                 600,
-                700 + Math.cos(angle) * 100,
+                650 + Math.cos(angle) * 100,
                 600 + Math.sin(angle) * 100,
             ]);
             strokeJoin('bevel');

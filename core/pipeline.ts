@@ -92,62 +92,54 @@ struct TextureMeta {
 @group(1) @binding(1) var textureArray: texture_2d_array<f32>;
 @group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
-fn shapeSDF(
-    uv: vec2f,    
-    innerRadius: f32,
-    endAngle: f32,
-) -> f32 {
+fn shapeSDF(uv: vec2f, innerRadius: f32, endAngle: f32) -> f32 {
     let center = vec2f(0.5, 0.5);
     let p = uv - center;
     let d = length(p);
-    
-    // Ring SDF: positive outside, negative inside
-    let ringSDF = max(innerRadius - d, d - 0.5);
-    
-    // Angle SDF (only if not a full circle)
-    var angleSDF = -1.0;
-    if (endAngle < 6.28318530718) {
-        let pNorm = p / max(d, 0.0001); // avoid division by zero
-        let endVec = vec2f(cos(endAngle), sin(endAngle));
-        
-        let crossStart = pNorm.y;
-        let crossEnd = pNorm.x * endVec.y - pNorm.y * endVec.x;
-        
-        if (endAngle <= 3.14159265359) {
-            // Small wedge: outside if either cross product is negative
-            angleSDF = max(-crossStart, -crossEnd);
-        } else {
-            // Large wedge: outside only if both are negative
-            angleSDF = min(-crossStart, -crossEnd);
-        }
+    let outerR = 0.5;
+
+    let ringSDF = max(d - outerR, innerRadius - d);
+    if (endAngle >= 6.28318530718 - 1e-5) {
+        return ringSDF;
     }
-    
-    return max(ringSDF, angleSDF);
+
+    let ang = clamp(endAngle, 0.0, 6.28318530718);
+    let vEnd = vec2f(cos(ang), sin(ang));
+
+    // Normals that point "into" the sector
+    let nStart = vec2f(0.0, -1.0);
+    let nEnd = vec2f(-vEnd.y, vEnd.x);
+
+    let distStart = dot(p, nStart);
+    let distEnd   = dot(p, nEnd);
+
+    // For small sectors (<= π) interior is intersection -> max
+    // For large sectors (> π) interior is union -> min
+    let sectorSDF = select(min(distStart, distEnd), max(distStart, distEnd), ang <= 3.14159265359);
+
+    return max(ringSDF, sectorSDF);
 }
 
 fn quadSDF(uv: vec2f) -> f32 {
-    let center = vec2f(0.5, 0.5);
-    let halfSize = vec2f(0.5, 0.5);
-    let p = abs(uv - center) - halfSize;
+	let p = abs(uv - 0.5) - 0.5;
     return length(max(p, vec2f(0.0))) + min(max(p.x, p.y), 0.0);
 }
 
 @fragment
 fn main(input: FragmentInput) -> @location(0) vec4f {
-	let tMeta = textureMeta[input.textureId];
-	var uv = tMeta.uvOffset + input.texcoord * tMeta.uvSize;
-	var color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer)) * input.color;
+    let tMeta = textureMeta[input.textureId];
+    var uv = tMeta.uvOffset + input.texcoord * tMeta.uvSize;
+    var color = textureSample(textureArray, mySampler, uv, u32(tMeta.layer)) * input.color;
 	
-    var sdf: f32;
-    if (input.endAngle >= 0.0) {
-        sdf = shapeSDF(input.texcoord, input.innerRadius, input.endAngle);
-    } else {
-        sdf = quadSDF(input.texcoord);
-    }
+    let sdf = select(
+        quadSDF(input.texcoord),
+        shapeSDF(input.texcoord, input.innerRadius, input.endAngle),
+        input.endAngle >= 0.0
+    );
 
-    let pixelSize = (fwidth(input.texcoord.x) + fwidth(input.texcoord.y)) * 0.5;
-    let alpha = 1.0 - smoothstep(0, pixelSize, sdf);
-
+    let w = max(fwidth(sdf), 1e-5);
+    let alpha = smoothstep(w, 0.0, sdf);
+	
     color *= alpha;
 
     return color;

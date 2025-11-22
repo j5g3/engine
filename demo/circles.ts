@@ -33,7 +33,6 @@ export default {
 			arc(380, 360, a0 + Math.sin(t) * 0.5, a1, 80, 10);
 			arc(580, 360, a0, a1, 80, 10 * t);
 
-			// Wedges with recognizable sweep angles
 			const centerY = 160;
 			const sweepsDeg = [30, 45, 60, 90, 120, 180, 270, 360];
 
