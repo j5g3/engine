@@ -113,8 +113,8 @@ fn shapeSDF(uv: vec2f, innerRadius: f32, endAngle: f32) -> f32 {
     let distStart = dot(p, nStart);
     let distEnd   = dot(p, nEnd);
 
-    // For small sectors (<= π) interior is intersection -> max
-    // For large sectors (> π) interior is union -> min
+    // For small sectors (<= PI) interior is intersection -> max
+    // For large sectors (> PI) interior is union -> min
     let sectorSDF = select(min(distStart, distEnd), max(distStart, distEnd), ang <= 3.14159265359);
 
     return max(ringSDF, sectorSDF);

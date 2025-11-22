@@ -8,6 +8,11 @@
 		padding: 0;
 		margin: 0;
 		scrollbar-width: none;
+		font-size: 16px;
+		font-family: Roboto, sans-serif;
+	}
+	select {
+		font-size: 16px;
 	}
 	#canvas {
 		margin: 32px auto;
@@ -23,17 +28,20 @@
 		height: 42px;
 		padding: 4px 16px;
 		border-bottom: 1px solid #ccc;
-		justify-content: right;
 	}
 </style>
 <div id="toolbar">
-	<select id="demo">
-		<option>circles</option>
-		<option>clock.json</option>
-		<option>lines</option>
-		<option>orbs.json</option>
-		<option selected>rect</option>
-	</select>
+	<label>
+		Demo:
+		<select id="demo">
+			<option>balls</option>
+			<option>circles</option>
+			<option>clock.json</option>
+			<option>lines</option>
+			<option>orbs.json</option>
+			<option selected>rect</option>
+		</select>
+	</label>
 </div>
 <div id="stage">
 	<canvas width="1280" height="720" id="canvas"></canvas>

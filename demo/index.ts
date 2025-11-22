@@ -17,6 +17,7 @@ const demos = {
 	lines: () => import('./lines.js'),
 	rect: () => import('./rect.js'),
 	circles: () => import('./circles.js'),
+	balls: () => import('./balls.js'),
 } as const;
 
 async function onChange() {
