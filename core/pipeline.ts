@@ -93,12 +93,10 @@ struct TextureMeta {
 @group(1) @binding(2) var<storage, read> textureMeta: array<TextureMeta>;
 
 fn shapeSDF(uv: vec2f, innerRadius: f32, endAngle: f32) -> f32 {
-    let center = vec2f(0.5, 0.5);
-    let p = uv - center;
+    let p = uv - vec2f(0.5, 0.5);
     let d = length(p);
-    let outerR = 0.5;
 
-    let ringSDF = max(d - outerR, innerRadius - d);
+    let ringSDF = max(d - 0.5, innerRadius - d);
     if (endAngle >= 6.28318530718 - 1e-5) {
         return ringSDF;
     }
