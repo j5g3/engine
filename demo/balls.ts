@@ -16,14 +16,14 @@ const HEIGHT = 720; // 720p canvas height
 
 const GRAVITY = 800; // px/s^2
 const RESTITUTION = 0.7; // bounciness 0..1
-const AIR_DRAG = 0.0; // 0 for none
+const AIR_DRAG = 0; // 0 for none
 
 const BALL_COUNT = 1000;
 const R_MIN = 8;
 const R_MAX = 20;
 
-const MIN_BOUNCE_SPEED = 25; // px/s: below this, treat as inelastic
-const POS_CORRECTION = 0.85; // 0..1: how aggressively to resolve overlap
+const MIN_BOUNCE_SPEED = 1; // px/s: below this, treat as inelastic
+const POS_CORRECTION = 1; // 0..1: how aggressively to resolve overlap
 const PEN_SLOP = 0.01; // px: ignore tiny penetrations
 const MU_DYNAMIC = 0.35; // ball-ball dynamic friction
 const GROUND_STATIC_V = 8; // px/s: snap-to-rest on ground when slower than this
