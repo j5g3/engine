@@ -9,7 +9,7 @@ const demoSelect = document.getElementById('demo') as HTMLSelectElement;
 const program = await webgpu({
 	canvas: document.getElementById('canvas') as HTMLCanvasElement,
 });
-let engine: Engine;
+let engine: Engine | undefined;
 const url = new URL(location.href);
 let demo: EngineJson;
 
@@ -45,4 +45,4 @@ const initialDemo = url.searchParams.get('demo');
 if (initialDemo) demoSelect.value = initialDemo;
 
 demoSelect.onchange = onChange;
-onChange();
+await onChange();

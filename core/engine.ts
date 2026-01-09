@@ -4,7 +4,8 @@ import { DrawEngine } from './draw.js';
 import type { TextureInit } from './texture-atlas.js';
 import type { Color, Program } from './pipeline.js';
 
-type UpdateFn = string | ((node: Node, get: (id: string) => Node) => void);
+type UpdateFnType = (node: Node, get: (id: string) => Node) => void;
+type UpdateFn = string | UpdateFnType;
 
 export interface EngineJson {
 	root: Node;
@@ -145,7 +146,11 @@ export class Engine {
 			const fn =
 				typeof node.update === 'function'
 					? node.update
-					: new Function('node', 'get', node.update);
+					: (new Function(
+							'node',
+							'get',
+							node.update,
+					  ) as UpdateFnType);
 			this.#push(() => fn(node, get));
 		}
 

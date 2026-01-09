@@ -147,7 +147,7 @@ fn main(input: FragmentInput) -> @location(0) vec4f {
 async function createWebGpuContext(
 	canvas: HTMLCanvasElement | OffscreenCanvas,
 ) {
-	if (!navigator.gpu) throw new Error('WebGPU not supported');
+	if (!('gpu' in navigator)) throw new Error('WebGPU not supported');
 	const adapter = await navigator.gpu.requestAdapter();
 	if (!adapter) throw new Error('Failed to get GPU adapter');
 	const device = await adapter.requestDevice();
@@ -420,7 +420,7 @@ export class InstanceBuffer {
 		device.queue.submit([encoder.finish()]);
 
 		this.buffer.destroy();
-		(this.buffer as GPUBuffer) = newBuffer;
+		(this as { buffer: GPUBuffer }).buffer = newBuffer;
 	}
 }
 
@@ -637,9 +637,8 @@ export class Program {
 	reset() {
 		this.instanceBuffer.reset();
 		this.textureAtlas.reset();
-		(this.whiteTexture as Texture) = this.createColorTexture(
-			new Float32Array([1, 1, 1, 1]),
-		);
+		(this as { whiteTexture: Texture }).whiteTexture =
+			this.createColorTexture(new Float32Array([1, 1, 1, 1]));
 		this.color.reset();
 		this.model.reset();
 	}

@@ -16,7 +16,7 @@ const HEIGHT = 720; // 720p canvas height
 
 const GRAVITY = 800; // px/s^2
 const RESTITUTION = 0.7; // bounciness 0..1
-const AIR_DRAG = 0; // 0 for none
+const AIR_DRAG = 0 as number; // 0 for none
 
 const BALL_COUNT = 1000;
 const R_MIN = 8;
