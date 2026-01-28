@@ -1,6 +1,3 @@
-This repo contains a work-in-progress graphics engine built with TypeScript, leveraging WebGPU.
-
-
 ## Features
 
 ### Engine
@@ -75,12 +72,3 @@ await engine.load({
 
 engine.requestRender();
 ```
-
-
-## Packages
-
-| Name           | License | Description                          | Links                                          |
-| -------------- | ------- | ------------------------------------ | ---------------------------------------------- |
-| @j5g3/core           | GPL-3.0    | A work-in-progress graphics engine built with TypeScript, leveraging WebGPU | [Docs](https://cxlio.github.io/docs/@j5g3/core/0.0.1/) |
-| @j5g3/demo           | GPL-3.0    | Demo files | [Docs](https://j5g3.github.io/engine/demo/) |
-

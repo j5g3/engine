@@ -2,7 +2,7 @@
 	"name": "@j5g3/core",
 	"version": "0.0.1",
 	"bugs": "https://github.com/j5g3/engine/issues",
-	"homepage": "https:/github.com/j5g3/engine/core",
+	"homepage": "https://github.com/j5g3/@j5g3/core",
 	"description": "A work-in-progress graphics engine built with TypeScript, leveraging WebGPU",
 	"license": "GPL-3.0",
 	"browser": "./index.bundle.js",

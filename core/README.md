@@ -8,7 +8,7 @@ A work-in-progress graphics engine built with TypeScript, leveraging WebGPU
 
 -   Branch Version: [0.0.1](https://npmjs.com/package/@j5g3/core/v/0.0.1)
 -   License: GPL-3.0
--   Documentation: [Link](https:/github.com/j5g3/engine/core)
+-   Documentation: [Link](https://github.com/j5g3/@j5g3/core)
 -   Report Issues: [Github](https://github.com/j5g3/engine/issues)
 
 ## Installation

@@ -8,7 +8,7 @@ Demo files
 
 -   Branch Version: [0.0.1](https://npmjs.com/package/@j5g3/demo/v/0.0.1)
 -   License: GPL-3.0
--   Documentation: [Link](https:/github.com/j5g3/engine/demo)
+-   Documentation: [Link](https://github.com/j5g3/@j5g3/demo)
 -   Report Issues: [Github](https://github.com/j5g3/engine/issues)
 
 ## Installation
