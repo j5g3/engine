@@ -1,7 +1,44 @@
 import { spec } from '@cxl/spec';
-import { Box, composeBox } from './index.js';
+import { Box, composeBox, TextureAtlas } from './index.js';
 
 export default spec('core', s => {
+	s.test('updates an existing texture from a typed array', async a => {
+		a.ok(navigator.gpu);
+		const adapter = await navigator.gpu.requestAdapter();
+		if (!adapter) return;
+		const device = await adapter.requestDevice();
+		const atlas = new TextureAtlas(device);
+		const texture = atlas.add({
+			width: 1,
+			height: 1,
+			data: Uint8Array.of(255, 0, 0, 255),
+		});
+		atlas.write(texture, Uint8Array.of(0, 255, 0, 255));
+
+		const output = device.createBuffer({
+			size: 256,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+		const encoder = device.createCommandEncoder();
+		encoder.copyTextureToBuffer(
+			{
+				texture: atlas.textureArray,
+				origin: { x: texture.x, y: texture.y, z: texture.layer },
+			},
+			{ buffer: output, bytesPerRow: 256 },
+			{ width: 1, height: 1, depthOrArrayLayers: 1 },
+		);
+		device.queue.submit([encoder.finish()]);
+		await output.mapAsync(GPUMapMode.READ);
+		a.equalValues(
+			new Uint8Array(output.getMappedRange()).slice(0, 4),
+			Uint8Array.of(0, 255, 0, 255),
+		);
+		output.unmap();
+		output.destroy();
+		device.destroy();
+	});
+
 	s.test('composeBox', it => {
 		it.should('return a Matrix (Float32Array) of length 16', a => {
 			const box: Box = {

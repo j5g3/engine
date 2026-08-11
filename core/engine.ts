@@ -1,7 +1,8 @@
 import { Matrix, Box, composeBox } from './math.js';
 import { DrawEngine } from './draw.js';
+import { isBufferSource } from './texture-atlas.js';
 
-import type { TextureInit } from './texture-atlas.js';
+import type { Texture, TextureInit } from './texture-atlas.js';
 import type { Color, Program } from './pipeline.js';
 
 type UpdateFnType = (node: Node, get: (id: string) => Node) => void;
@@ -11,11 +12,23 @@ export interface EngineJson {
 	root: Node;
 }
 
-export interface TextureComponent {
+export interface ImageTextureComponent {
 	width?: number;
 	height?: number;
 	src: string;
+	dirty?: boolean;
 }
+
+export interface BufferTextureComponent {
+	width: number;
+	height: number;
+	src: GPUCopyExternalImageSource | GPUAllowSharedBufferSource;
+	dirty?: boolean;
+}
+
+export type TextureComponent =
+	| ImageTextureComponent
+	| BufferTextureComponent;
 
 export interface Node {
 	readonly id?: string;
@@ -46,10 +59,16 @@ export interface Node {
 interface CompiledNode extends Node {
 	box?: Box & { dirty: boolean; parentM: Matrix };
 	_instanceIndex: number;
+	_texture?: Texture;
 	dirty?: boolean;
 }
 
 export async function imageLoad({ src, width, height }: TextureComponent) {
+	if (typeof src !== 'string') {
+		if (width === undefined || height === undefined)
+			throw new Error('Buffer textures require width and height');
+		return { data: src, width, height };
+	}
 	return new Promise<TextureInit>(resolve => {
 		const img = new Image();
 		img.src = src;
@@ -67,7 +86,7 @@ export async function imageDataFromDataURL({
 	src,
 	width,
 	height,
-}: TextureComponent): Promise<ImageData> {
+}: ImageTextureComponent): Promise<ImageData> {
 	const response = await fetch(src);
 	const blob = await response.blob();
 
@@ -114,7 +133,9 @@ export class Engine {
 		}
 
 		if (node.texture) {
-			const txt = program.textureAtlas.add(await imageLoad(node.texture));
+			const txt = (compiledNode._texture = program.textureAtlas.add(
+				await imageLoad(node.texture),
+			));
 			program.textureId = txt.id;
 		}
 
@@ -155,6 +176,15 @@ export class Engine {
 		}
 
 		this.commit.push(() => {
+			if (node.texture?.dirty && compiledNode._texture) {
+				const src = node.texture.src;
+				if (typeof src === 'string' || !isBufferSource(src))
+					throw new Error('Dynamic textures require a buffer source');
+				program.textureAtlas.write(compiledNode._texture, src);
+				node.texture.dirty = false;
+				this.requestRender();
+			}
+
 			if (compiledNode.box?.dirty) {
 				const M = composeBox(compiledNode.box);
 				program.model.set(compiledNode.box.parentM);

@@ -12,9 +12,20 @@ export interface Layer {
 }
 
 export interface TextureInit {
-	data: GPUCopyExternalImageSource | ArrayBuffer; //GPUAllowSharedBufferSource;
+	data: GPUCopyExternalImageSource | GPUAllowSharedBufferSource;
 	width: number;
 	height: number;
+}
+
+export function isBufferSource(
+	data: TextureInit['data'],
+): data is GPUAllowSharedBufferSource {
+	return (
+		data instanceof ArrayBuffer ||
+		(typeof SharedArrayBuffer !== 'undefined' &&
+			data instanceof SharedArrayBuffer) ||
+		ArrayBuffer.isView(data)
+	);
 }
 
 export class TextureAtlas {
@@ -94,20 +105,8 @@ export class TextureAtlas {
 
 	add(texture: TextureInit): Texture {
 		const result = this.findNext(texture.width, texture.height);
-		if (texture.data instanceof ArrayBuffer)
-			this.device.queue.writeTexture(
-				{
-					texture: this.textureArray,
-					origin: { x: result.x, y: result.y, z: result.layer },
-				},
-				texture.data,
-				{ bytesPerRow: texture.width * 4 }, // rgba8unorm -> 4 bytes per pixel
-				{
-					width: texture.width,
-					height: texture.height,
-					depthOrArrayLayers: 1,
-				},
-			);
+		if (isBufferSource(texture.data))
+			this.write(result, texture.data);
 		else
 			this.device.queue.copyExternalImageToTexture(
 				{
@@ -124,6 +123,22 @@ export class TextureAtlas {
 			);
 		this.updateTextureMeta(result);
 		return result;
+	}
+
+	write(texture: Texture, data: GPUAllowSharedBufferSource) {
+		this.device.queue.writeTexture(
+			{
+				texture: this.textureArray,
+				origin: { x: texture.x, y: texture.y, z: texture.layer },
+			},
+			data,
+			{ bytesPerRow: texture.w * 4 },
+			{
+				width: texture.w,
+				height: texture.h,
+				depthOrArrayLayers: 1,
+			},
+		);
 	}
 
 	reset() {
